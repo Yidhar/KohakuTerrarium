@@ -91,6 +91,7 @@ class OpenAIProvider(BaseLLMProvider):
 
         self.extra_body = extra_body or {}
         self._last_usage: dict[str, int] = {}
+        self.prompt_cache_key: str | None = None
 
         self._client = AsyncOpenAI(
             api_key=api_key,
@@ -156,6 +157,10 @@ class OpenAIProvider(BaseLLMProvider):
         if merged_extra:
             create_kwargs["extra_body"] = merged_extra
 
+        # Prompt cache key: first-class SDK parameter for routing stickiness
+        if self.prompt_cache_key:
+            create_kwargs["prompt_cache_key"] = self.prompt_cache_key
+
         logger.debug("Starting streaming request", model=create_kwargs["model"])
 
         pending_calls: dict[int, dict[str, str]] = {}
@@ -165,10 +170,18 @@ class OpenAIProvider(BaseLLMProvider):
         async for chunk in stream:
             # Usage (usually in the final chunk)
             if chunk.usage:
+                cached = 0
+                cache_write = 0
+                details = getattr(chunk.usage, "prompt_tokens_details", None)
+                if details:
+                    cached = getattr(details, "cached_tokens", 0) or 0
+                    cache_write = getattr(details, "cache_write_tokens", 0) or 0
                 self._last_usage = {
                     "prompt_tokens": chunk.usage.prompt_tokens or 0,
                     "completion_tokens": chunk.usage.completion_tokens or 0,
                     "total_tokens": chunk.usage.total_tokens or 0,
+                    "cached_tokens": cached,
+                    "cache_write_tokens": cache_write,
                 }
 
             if not chunk.choices:
@@ -250,6 +263,9 @@ class OpenAIProvider(BaseLLMProvider):
         if merged_extra:
             create_kwargs["extra_body"] = merged_extra
 
+        if self.prompt_cache_key:
+            create_kwargs["prompt_cache_key"] = self.prompt_cache_key
+
         logger.debug("Starting non-streaming request", model=create_kwargs["model"])
 
         response = await self._client.chat.completions.create(**create_kwargs)
@@ -274,10 +290,18 @@ class OpenAIProvider(BaseLLMProvider):
             )
 
         if response.usage:
+            cached = 0
+            cache_write = 0
+            details = getattr(response.usage, "prompt_tokens_details", None)
+            if details:
+                cached = getattr(details, "cached_tokens", 0) or 0
+                cache_write = getattr(details, "cache_write_tokens", 0) or 0
             self._last_usage = {
                 "prompt_tokens": response.usage.prompt_tokens or 0,
                 "completion_tokens": response.usage.completion_tokens or 0,
                 "total_tokens": response.usage.total_tokens or 0,
+                "cached_tokens": cached,
+                "cache_write_tokens": cache_write,
             }
             logger.debug(
                 "Request completed",
