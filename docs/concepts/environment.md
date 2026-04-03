@@ -136,6 +136,8 @@ tid_b = await manager.create_terrarium("examples/terrariums/novel_terrarium")
 # No collision: different shared channels, different creature sessions
 ```
 
+For the serving layer that manages these instances, see [Serving](serving.md).
+
 ### Accessing Environment from Tools
 
 Tools receive both session (private) and environment (shared) via `ToolContext`:
@@ -158,12 +160,12 @@ class MyTool(BaseTool):
 
 When a tool like `send_message` resolves a channel name:
 
-1. **Private session channels** - checked first (sub-agent internal channels)
-2. **Shared environment channels** - checked second (inter-creature channels)
-3. **Auto-create in private** - if not found anywhere, creates a queue in the session
-4. **Conflict validation** - if a shared channel has the same name, auto-create is blocked with an error
+1. **Private session channels**: checked first (sub-agent internal channels)
+2. **Shared environment channels**: checked second (inter-creature channels)
+3. **Auto-create in private**: if not found anywhere, creates a queue in the session
+4. **Conflict validation**: if a shared channel has the same name, auto-create is blocked with an error
 
-This means sub-agent channels stay private automatically, terrarium channels are accessible to all creatures, and there is no accidental shadowing.
+This means sub-agent channels stay private automatically, terrarium channels are accessible to all creatures, and there is no accidental shadowing. See [Channels](channels.md) for the full channel type reference.
 
 ## Session Persistence
 

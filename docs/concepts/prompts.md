@@ -55,7 +55,7 @@ controller:
 
 ### tool_format: How LLMs Call Tools
 
-The `tool_format` setting determines what syntax examples appear in the prompt.
+The `tool_format` setting determines what syntax examples appear in the prompt. See [Tool Formats](tool-formats.md) for the full format reference.
 
 **bracket** (default):
 ```

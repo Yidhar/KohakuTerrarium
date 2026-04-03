@@ -1,8 +1,119 @@
-# Framework Internals
+# Agents (Creatures)
 
-This document covers the internal design of the single-agent framework. For the concepts behind these components, see [Creatures and Agents](../concept/creature.md).
+## The Idea
 
-## Core Components
+A creature is a complete, self-contained agent. It has everything it needs to operate independently: an LLM brain, tools to interact with the world, sub-agents for delegation, and memory for persistence.
+
+The name "creature" comes from the terrarium metaphor. You build a creature, test it standalone, then place it in a terrarium where it collaborates with others. The creature does not change; it does not know it is in a terrarium.
+
+## Anatomy of a Creature
+
+```
+                    +---------------------------+
+                    |        Creature            |
+                    |                           |
+Input ------+       |   +-------------------+   |
+            +------>|   |   Controller      |   |
+Trigger ----+       |   |   (LLM brain)     |   |
+                    |   +--------+----------+   |
+                    |            |               |
+                    |   +--------v----------+   |
+                    |   |  Dispatches to:    |   |
+                    |   |  - Tools (parallel)|   |
+                    |   |  - Sub-agents      |   |       +--------+
+                    |   +--------+----------+   +------>| Output |
+                    |            |               |       +--------+
+                    |   +--------v----------+   |
+                    |   | Results feed back  |   |
+                    |   | to controller for  |   |
+                    |   | next decision      |   |
+                    |   +-------------------+   |
+                    +---------------------------+
+```
+
+**Input** brings events from the outside: user typing, API calls, speech.
+
+**Triggers** generate events automatically: timers, channel messages, conditions.
+
+**Controller** is the LLM. It receives events, thinks, and dispatches work. It orchestrates but does not do heavy work itself.
+
+**Tools** execute actions: read files, run shell commands, search code, send messages. They start immediately during LLM streaming and run in parallel.
+
+**Sub-agents** are nested creatures with their own LLM and limited tools. The controller delegates complex subtasks to them.
+
+**Output** routes the controller's text to the right destination: terminal, TTS, Discord, named API endpoints.
+
+## The Controller Pattern
+
+The controller is the brain, but its job is to **dispatch, not execute**.
+
+```
+Good:  Controller decides -> calls bash tool -> gets result -> decides next step
+Bad:   Controller writes a 2000-word essay in one response
+```
+
+Long outputs (user-facing content, prose, detailed analysis) should come from **output sub-agents**, not from the controller directly. This keeps the controller lightweight and its context window small.
+
+## Everything Is an Event
+
+All inputs flow through the same `TriggerEvent` type:
+
+```
+User types "hello"        -> TriggerEvent(type="user_input")
+Timer fires               -> TriggerEvent(type="timer")
+Tool finishes             -> TriggerEvent(type="tool_complete")
+Channel message arrives   -> TriggerEvent(type="channel_message")
+Sub-agent returns         -> TriggerEvent(type="subagent_output")
+```
+
+This unified model keeps the controller loop simple: receive event, call LLM, dispatch results, repeat. For the full processing loop and event source details, see [Execution Model](execution.md).
+
+## Sub-Agents
+
+A creature can delegate to sub-agents, which are smaller creatures with restricted capabilities:
+
+```
+Controller (full access)
+  |
+  +-- explore sub-agent (read-only tools: glob, grep, read)
+  |
+  +-- worker sub-agent (write tools: edit, write, bash)
+  |
+  +-- critic sub-agent (read-only, reviews worker's output)
+```
+
+Sub-agents have their own LLM conversation and tool registry. They return results to the parent controller. This is the **vertical hierarchy**, task decomposition within one creature.
+
+Sub-agents are background jobs. The `SubAgentManager` registers and spawns sub-agents, sharing the `JobStore` with the executor. Results are delivered via the executor's `_on_complete` callback, the same path as background tools.
+
+## Defining a Creature
+
+A creature is defined by a YAML config and a system prompt:
+
+```yaml
+name: swe_agent
+controller:
+  model: gpt-5.4
+  auth_mode: codex-oauth
+  tool_format: native
+system_prompt_file: prompts/system.md
+input: { type: cli }
+tools:
+  - name: bash
+  - name: read
+  - name: write
+subagents:
+  - name: explore
+  - name: plan
+```
+
+The system prompt defines personality and workflow. The tool list and call syntax are auto-generated; never write them in the prompt manually. For details on prompt assembly, see [Prompt System](prompts.md).
+
+See [Configuration Reference](../guide/configuration.md) for all fields. See [Examples](../guide/examples.md) for walkthroughs.
+
+---
+
+## Framework Internals
 
 ### Agent (`core/agent.py`)
 
@@ -49,7 +160,7 @@ The LLM conversation loop with event queue management.
 - Push events via async queue
 - Manage job tracking and status
 
-**Key method - `run_once()`:**
+**Key method, `run_once()`:**
 1. Add event content to conversation
 2. Stream LLM response via `_run_internal()`
 3. Parse response for tool calls, commands, output blocks
@@ -57,24 +168,11 @@ The LLM conversation loop with event queue management.
 
 `run_once()` handles the outer conversation setup and result packaging, while `_run_internal()` owns the streaming loop and parse-event dispatch.
 
-**Command handling:**
-Commands like `[/info]bash[info/]` are handled inline during streaming - the result is converted to a TextEvent and yielded.
+Commands like `[/info]bash[info/]` are handled inline during streaming; the result is converted to a TextEvent and yielded.
 
 ### Executor (`core/executor.py`)
 
-Manages async tool execution in the background.
-
-**Execution flow:**
-1. Tool call detected during LLM streaming
-2. `submit()` creates `asyncio.Task` immediately (non-blocking)
-3. LLM continues streaming
-4. For DIRECT tools: processing loop waits for task, feeds result back
-5. For BACKGROUND tools: placeholder added to conversation, result delivered later via `_on_complete` callback
-
-**Job tracking:**
-- Each tool execution gets a unique `job_id`
-- Status stored in shared `JobStore`
-- States: `PENDING` -> `RUNNING` -> `DONE`/`ERROR`/`CANCELLED`
+Manages async tool execution in the background. For execution flow, tool modes, and background tool lifecycle, see [Execution Model](execution.md).
 
 ### JobStore (`core/job.py`)
 
@@ -127,7 +225,7 @@ class Session:
     extra: dict[str, Any]
 ```
 
-Agents with the same `session_key` share the same Session instance. See [Environment-Session](../concept/environment.md) for the full isolation model.
+Agents with the same `session_key` share the same Session instance. See [Environment-Session](environment.md) for the full isolation model.
 
 ### Registry (`core/registry.py`)
 
@@ -212,125 +310,15 @@ State: OUTPUT_BLOCK
   BlockEndEvent       -> transition to NORMAL
 ```
 
-Activity notifications (`on_activity()`) are separate from text output - they are used for tool_start, tool_done, tool_error, etc. The router also supports `notify_activity(metadata=)` for structured metadata delivery and `add_secondary()` / `remove_secondary()` for adding output modules that observe without replacing the primary output (used by SessionOutput and WebSocket StreamOutput).
+Activity notifications (`on_activity()`) are separate from text output; they are used for tool_start, tool_done, tool_error, etc. The router also supports `notify_activity(metadata=)` for structured metadata delivery and `add_secondary()` / `remove_secondary()` for adding output modules that observe without replacing the primary output (used by SessionOutput and WebSocket StreamOutput).
 
 ### Token Usage Tracking
 
 The controller tracks per-LLM-call token usage via the `_last_usage` attribute on the LLM provider. Both the OpenAI provider and Codex OAuth provider capture usage from streaming (final SSE chunk) and non-streaming responses. Usage is emitted as a `token_usage` activity event after each LLM call.
 
-### Sub-Agent System (`modules/subagent/`)
+### Stream Parser (`parsing/state_machine.py`)
 
-Sub-agents are background jobs. The `SubAgentManager` registers and spawns sub-agents, sharing the `JobStore` with the executor. Results are delivered via the executor's `_on_complete` callback, same as background tools. See [Creatures - Sub-Agents](../concept/creature.md#sub-agents) for the conceptual overview.
-
-## Parsing System
-
-### StreamParser (`parsing/state_machine.py`)
-
-Stateful parser for streaming LLM output using a character-by-character state machine.
-
-**Parse events:**
-- `TextEvent` - regular text content
-- `ToolCallEvent` - tool call detected
-- `SubAgentCallEvent` - sub-agent call detected
-- `CommandEvent` - framework command detected
-- `OutputEvent` - explicit output block
-- `BlockStartEvent` / `BlockEndEvent` - block boundaries
-
-The parser uses `ToolCallFormat` to support multiple tool call syntaxes. See [Tool Formats](../concept/tool-formats.md).
-
-## Prompt System
-
-### Aggregator (`prompt/aggregator.py`)
-
-Builds complete system prompts from components:
-
-1. **Base prompt** from `system.md` (agent personality/guidelines)
-2. **Tool list** (name + one-line description) - auto-generated from registry
-3. **Framework hints** (tool call syntax, commands, execution model)
-4. **Output model hints** (if named outputs configured)
-
-**Skill modes:**
-- **Dynamic** (default): Model uses the `info` tool to read docs on demand
-- **Static**: All tool docs included in system prompt upfront
-
-## Agent Event Architecture
-
-The agent has three concurrent event sources, all converging on `_process_event()`:
-
-```
-                  +-------------------+
-                  |  _process_event() |  <-- processing lock serializes access
-                  +-------------------+
-                    ^       ^       ^
-                    |       |       |
-              +-----+  +---+---+  +--------+
-              |Input |  |Trigger|  |BG Tool |
-              |Loop  |  |Tasks  |  |Complete|
-              +------+  +-------+  +--------+
-
-Input Loop:    agent.run() -> input.get_input() -> _process_event()
-Trigger Tasks: asyncio.create_task(_run_trigger()) -> _process_event()
-BG Complete:   executor._on_complete callback -> asyncio.create_task(_process_event())
-```
-
-**Input loop** (`agent.run()`): Blocks on `input.get_input()`, processes user messages.
-
-**Trigger tasks**: Each trigger runs as a separate `asyncio.Task`. When a trigger fires (channel message, timer, etc.), it calls `_process_event()` directly.
-
-**Background completion**: When a background tool finishes, the executor calls `_on_bg_complete` which creates a new task calling `_process_event()`. This is the SAME delivery path as triggers.
-
-The `_processing_lock` (asyncio.Lock) ensures only one `_process_event` runs at a time, serializing concurrent trigger fires and background completions.
-
-## Processing Loop
-
-`_process_event_with_controller()` (in `core/agent_handlers.py`) handles ONE event and all its direct tool calls:
-
-```
-Phase 1: Reset router, prepare tracking
-Phase 2: Run controller.run_once()
-         +-- ToolCallEvent (direct)    -> start task, track in direct_tasks
-         +-- ToolCallEvent (background)-> start task, add placeholder to conversation
-         +-- SubAgentCallEvent         -> start sub-agent (background)
-         +-- CommandResultEvent        -> on_activity()
-         +-- TextEvent / Other         -> output_router.route()
-Phase 3: Termination check
-Phase 4: Flush output, collect feedback
-         +-- Output feedback (named outputs)
-         +-- Direct tool results (waited for)
-Phase 5: Exit if no feedback; continue if direct results pending
-Phase 6: Push feedback to controller -> loop to Phase 1
-```
-
-**Key design: background tools do NOT block the loop.** They get a placeholder response ("Running in background") so the API always sees a tool result for every tool call. When the background tool finishes, the executor's `_on_complete` callback fires `_process_event` as a new event. The agent is back in idle by then, waiting for input or the next trigger.
-
-### Tool Execution Modes
-
-| Mode | Declaration | Behavior |
-|------|-------------|----------|
-| **DIRECT** | `execution_mode = ExecutionMode.DIRECT` | Loop waits for result, feeds back to LLM |
-| **BACKGROUND** | `execution_mode = ExecutionMode.BACKGROUND` | Placeholder response, result delivered later via `_on_complete` |
-| **Opt-in background** | Model passes `run_in_background=True` | Same as BACKGROUND, but decided by the model at call time |
-
-Tools declaring `BACKGROUND` mode are forced background. The model cannot make them direct. This is used for tools like `terrarium_observe` that wait indefinitely for external events.
-
-### Example: Root Agent + Background Observe
-
-```
-1. User: "Fix the auth bug"
-2. _process_event(user_input)
-   -> LLM calls terrarium_send(channel=tasks, message="Fix auth bug")  [direct]
-   -> LLM calls terrarium_observe(channel=results)                      [forced bg]
-   -> terrarium_send completes, result fed back
-   -> terrarium_observe gets placeholder "Running in background"
-   -> LLM responds: "Task dispatched, team is working on it"
-   -> No more feedback -> loop exits
-3. Agent idle, waiting for input.get_input()
-4. ... swe creature works, posts to results channel ...
-5. terrarium_observe receives message, executor fires _on_complete
-6. _on_bg_complete -> asyncio.create_task(_process_event(tool_complete_event))
-7. _process_event runs with the observe result
-   -> LLM sees the result, summarizes for user
-```
+Stateful parser for streaming LLM output using a character-by-character state machine. Parse events include `TextEvent`, `ToolCallEvent`, `SubAgentCallEvent`, `CommandEvent`, `OutputEvent`, and `BlockStartEvent` / `BlockEndEvent`. The parser uses `ToolCallFormat` to support multiple tool call syntaxes. See [Tool Formats](tool-formats.md) for format details, and [Execution Model](execution.md) for how parse events drive the processing loop.
 
 ## File Organization
 

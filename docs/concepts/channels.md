@@ -190,7 +190,7 @@ creature_b <--+--> [team_chat broadcast]
 creature_c <--+
 ```
 
-These patterns compose freely, enabling pipelines, fan-out, fan-in, and mesh topologies.
+These patterns compose freely, enabling pipelines, fan-out, fan-in, and mesh topologies. See [Terrariums](terrariums.md) for how topologies are configured in the terrarium YAML.
 
 ## ChannelRegistry
 

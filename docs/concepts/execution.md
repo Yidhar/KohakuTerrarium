@@ -104,7 +104,7 @@ Creature B has ChannelTrigger on "review"
     -> Creature B's LLM sees the message and responds
 ```
 
-Each creature has `NoneInput` (blocks forever). All creature activity comes through triggers. The terrarium injects `ChannelTrigger` instances during setup.
+Each creature has `NoneInput` (blocks forever). All creature activity comes through triggers. The terrarium injects `ChannelTrigger` instances during setup. See [Terrariums](terrariums.md) for the full runtime lifecycle.
 
 ## Root Agent Event Flow
 
@@ -134,7 +134,7 @@ terrarium_observe receives message -> _on_bg_complete fires:
 ## Concurrency Model
 
 - **Within one agent**: Single-threaded async. One `_process_event` at a time (lock). Multiple tools run concurrently via `asyncio.Task`.
-- **Between creatures**: Fully concurrent. Each creature has its own agent, own lock, own LLM calls. Communication is explicit via channels.
+- **Between creatures**: Fully concurrent. Each creature has its own agent, own lock, own LLM calls. Communication is explicit via [channels](channels.md).
 - **Root vs terrarium**: Root agent and creatures run concurrently. Root's background tools (`terrarium_observe`) bridge the two.
 
 ## Token Usage Tracking
@@ -157,4 +157,4 @@ When session recording is enabled (via `--session` flag or programmatic `attach_
 - Conversation snapshots (raw `list[dict]` via msgpack, preserving tool_calls)
 - Agent state (scratchpad, turn count)
 
-The recording is non-blocking and does not modify the processing loop. It uses the same secondary output pattern as the WebSocket `StreamOutput`.
+The recording is non-blocking and does not modify the processing loop. It uses the same secondary output pattern as the WebSocket `StreamOutput`. See [Environment-Session](environment.md) for the full isolation model.

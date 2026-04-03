@@ -158,7 +158,7 @@ When `session_dir` is provided, `KohakuManager` automatically creates a `Session
 - Channel messages (via `on_send` callbacks)
 - Sub-agent conversations and metadata
 
-The recording uses `SessionOutput`, an `OutputModule` added as a secondary output on each creature's output router. This captures events without modifying the processing loop, following the same pattern as the WebSocket `StreamOutput`.
+The recording uses `SessionOutput`, an `OutputModule` added as a secondary output on each creature's output router. This captures events without modifying the processing loop, following the same pattern as the WebSocket `StreamOutput`. See [Execution Model](execution.md) for more on secondary outputs.
 
 ## Unified WebSocket Architecture
 
@@ -167,4 +167,4 @@ Each terrarium instance uses a single WebSocket connection that carries ALL crea
 - `/ws/terrariums/{id}`: single WS carrying all events for a terrarium
 - `/ws/creatures/{id}`: per-creature WS for standalone agents
 
-Events are multiplexed with a `source` field identifying the creature or channel. Channel messages are captured via `on_send` callbacks on `BaseChannel`, which fire on every send (both queue and broadcast channels).
+Events are multiplexed with a `source` field identifying the creature or channel. Channel messages are captured via `on_send` callbacks on `BaseChannel`, which fire on every send (both queue and broadcast channels). See [Channels](channels.md) for details on `on_send` callbacks.

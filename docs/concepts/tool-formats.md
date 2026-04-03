@@ -51,7 +51,7 @@ Here is my story concept.
 
 ### Native Tool Calling
 
-Uses the LLM provider's built-in function calling API (e.g., OpenAI tool use). The stream parser is bypassed - tool calls come as structured data from the API response.
+Uses the LLM provider's built-in function calling API (e.g., OpenAI tool use). The stream parser is bypassed; tool calls come as structured data from the API response.
 
 This is the most reliable format for models that support it well, since the model is constrained to produce valid tool calls.
 
@@ -125,7 +125,7 @@ The `arg_style` field controls how arguments are parsed:
 - **line**: Arguments on separate lines with `@@key=value` syntax
 - **inline**: Attributes in the opening tag with `key="value"` syntax
 
-For native tool calling, the parser is not involved - the LLM provider returns structured tool call objects directly.
+For native tool calling, the parser is not involved; the LLM provider returns structured tool call objects directly.
 
 ## Choosing a Format
 
@@ -135,4 +135,4 @@ For native tool calling, the parser is not involved - the LLM provider returns s
 | `xml` | Models trained on XML data | Standard XML syntax, may conflict with HTML/XML in output |
 | `native` | OpenAI, Anthropic, Gemini | Most reliable, but requires provider support |
 
-The prompt aggregator automatically adjusts framework hints to match the configured format, so the LLM receives instructions appropriate for the format in use.
+The [prompt aggregator](prompts.md) automatically adjusts framework hints to match the configured format, so the LLM receives instructions appropriate for the format in use.

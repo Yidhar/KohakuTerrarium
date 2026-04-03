@@ -1,6 +1,6 @@
 # Python API Reference
 
-Comprehensive reference for all public Python APIs. For architectural context, see [Architecture](../architecture/README.md).
+Comprehensive reference for all public Python APIs. For architectural context, see [Concepts](../concepts/overview.md).
 
 ## Core: Agent (`core/agent.py`)
 

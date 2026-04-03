@@ -1,8 +1,8 @@
 # Configuration Reference
 
-Complete reference for agent configuration (`config.yaml`) and terrarium configuration (`terrarium.yaml`).
+Complete reference for agent configuration (`config.yaml`).
 
-## Part 1: Agent Configuration
+## Agent Configuration
 
 KohakuTerrarium supports YAML, JSON, and TOML configuration formats. YAML is recommended.
 
@@ -72,7 +72,7 @@ controller:
 | `include_tools_in_prompt` | bool | true | Include tool list |
 | `include_hints_in_prompt` | bool | true | Include framework hints |
 | `skill_mode` | string | "dynamic" | "dynamic" (use info command) or "static" (all docs in prompt) |
-| `tool_format` | string or dict | "bracket" | Tool call format. See [Tool Formats](../concept/tool-formats.md) |
+| `tool_format` | string or dict | "bracket" | Tool call format. See [Tool Formats](../concepts/tool-formats.md) |
 
 ### Input Configuration
 
@@ -305,142 +305,4 @@ examples/agent-apps/my_agent/
 
 ---
 
-## Part 2: Terrarium Configuration
-
-Terrarium configuration is a YAML file that defines creatures, channels, and the interface for a multi-agent system.
-
-### File Location
-
-The runtime looks for `terrarium.yaml` or `terrarium.yml` in the given path:
-
-```python
-from kohakuterrarium.terrarium import load_terrarium_config
-
-config = load_terrarium_config("examples/terrariums/novel_terrarium/")
-config = load_terrarium_config("examples/terrariums/novel_terrarium/terrarium.yaml")
-```
-
-### Full YAML Format
-
-```yaml
-terrarium:
-  name: <string>                    # Terrarium name (default: "terrarium")
-
-  creatures:
-    - name: <string>                # Required. Unique creature name.
-      config: <path>                # Required. Path to agent config folder (relative to this file).
-      channels:
-        listen: [<channel_names>]   # Channels this creature receives messages from.
-        can_send: [<channel_names>] # Channels this creature is allowed to send to.
-      output_log: <bool>            # Capture LLM output to a ring buffer (default: false).
-      output_log_size: <int>        # Ring buffer size when output_log is true (default: 100).
-
-  channels:
-    <channel_name>:
-      type: queue | broadcast       # Channel type (default: queue).
-      description: <string>         # Human-readable description, shown in system prompts.
-
-  interface:
-    type: cli | web | mcp | none    # Interface type for human interaction.
-    observe: [<channel_names>]      # Channels the interface can read.
-    inject_to: [<channel_names>]    # Channels the interface can write to.
-```
-
-### Creatures
-
-Creature config supports two approaches:
-- **`config`**: Path to agent config folder (relative to terrarium YAML)
-- **`base_config`**: Reference to a creature template (e.g., `creatures/swe`) with inline overrides
-
-When using `base_config`, the creature inherits tools, sub-agents, and system prompts from the referenced creature, and the terrarium YAML can specify overrides inline (model, temperature, etc.).
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `name` | string | Yes | - | Unique name for this creature instance |
-| `config` | path | Yes* | - | Path to agent config folder, relative to terrarium YAML |
-| `base_config` | string | Yes* | - | Creature template to inherit from (alternative to `config`) |
-| `channels.listen` | list[string] | No | `[]` | Channel names to receive messages from |
-| `channels.can_send` | list[string] | No | `[]` | Channel names allowed for sending |
-| `output_log` | bool | No | `false` | Enable output log capture |
-| `output_log_size` | int | No | `100` | Number of log entries to retain |
-
-**Config path resolution:** Creature config paths resolve relative to the directory containing the terrarium YAML file.
-
-**Reusing agent configs:** Multiple creatures can reference the same agent config with different names, creating separate instances from the same template.
-
-### Channels
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `type` | string | No | `queue` | `queue` (point-to-point) or `broadcast` (all subscribers) |
-| `description` | string | No | `""` | Shown in creature system prompts for channel awareness |
-
-For channel semantics, see [Channels](../concept/channels.md).
-
-### Interface
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `type` | string | No | `none` | Interface type: `cli`, `web`, `mcp`, `none` |
-| `observe` | list[string] | No | `[]` | Channels the interface can read |
-| `inject_to` | list[string] | No | `[]` | Channels the interface can write to |
-
-### Environment Variables
-
-Creature agent configs support environment variable interpolation:
-
-```yaml
-controller:
-  model: "${OPENROUTER_MODEL:google/gemini-3-flash-preview}"
-  api_key_env: OPENROUTER_API_KEY
-```
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENROUTER_API_KEY` | Yes | API key for your LLM provider |
-| `OPENROUTER_MODEL` | No | Model override (creature configs have defaults) |
-
-Set these in a `.env` file at the project root, loaded by `python-dotenv`.
-
-### Complete Example
-
-```yaml
-terrarium:
-  name: novel_writer
-
-  creatures:
-    - name: brainstorm
-      config: ./creatures/brainstorm/
-      channels:
-        listen: [feedback]
-        can_send: [ideas, team_chat]
-
-    - name: planner
-      config: ./creatures/planner/
-      channels:
-        listen: [ideas]
-        can_send: [outline, team_chat]
-
-    - name: writer
-      config: ./creatures/writer/
-      channels:
-        listen: [outline]
-        can_send: [draft, feedback, team_chat]
-
-  channels:
-    ideas:      { type: queue, description: "Raw ideas from brainstorm to planner" }
-    outline:    { type: queue, description: "Chapter outlines from planner to writer" }
-    draft:      { type: queue, description: "Written chapters for review" }
-    feedback:   { type: queue, description: "Feedback from writer back to brainstorm" }
-    team_chat:  { type: broadcast, description: "Team-wide status updates" }
-
-  interface:
-    type: cli
-    observe: [ideas, outline, draft, feedback, team_chat]
-    inject_to: [feedback]
-```
-
-**Key points:**
-- `input: type: none` in creature configs is significant - creatures receive work through channel triggers, not direct user input. The terrarium runtime overrides input to `NoneInput` regardless.
-- Creatures that participate in channels need `send_message` and/or `wait_channel` tools in their own `config.yaml`.
-- The runtime fires each creature's `startup_trigger` after all creatures are started, so channels are available from the beginning.
+For terrarium configuration, see [Terrariums](terrariums.md).

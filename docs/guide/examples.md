@@ -1,4 +1,4 @@
-# Example Agents
+# Examples
 
 This guide walks through the example agents included in the `examples/` folder, explaining their architecture and patterns.
 
@@ -247,7 +247,7 @@ Best for: Autonomous monitoring, background processing, event-driven agents
    +-- custom/       (optional)
    ```
 3. **Start with builtin modules**, add custom as needed
-4. **Test incrementally** - start with CLI input, add complexity
+4. **Test incrementally**: start with CLI input, add complexity
 
 ---
 

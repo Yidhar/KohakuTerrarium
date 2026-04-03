@@ -23,13 +23,13 @@ A creature built for standalone use works identically in a terrarium. It does no
 
 ## The Five Concepts
 
-### [Creature](creature.md) - The Self-Contained Agent
+### [Creature](agents.md) - The Self-Contained Agent
 
 A creature is a complete agent: LLM controller, tools, sub-agents, memory. It receives input, thinks, acts, and produces output. Every creature is built from five systems: input, triggers, controller, tools, and output.
 
 Think of it as a microservice: private internals, well-defined interface.
 
-### [Terrarium](terrarium.md) - The Wiring Layer
+### [Terrarium](terrariums.md) - The Wiring Layer
 
 A terrarium places creatures in a shared environment and connects them through channels. It has no intelligence of its own. It just moves messages.
 
@@ -85,4 +85,4 @@ User Request
   - Memory
 ```
 
-For implementation details, see [Architecture](../architecture/README.md). For API usage, see [API Reference](../api-reference/README.md).
+For details on the execution model, see [Execution](execution.md). For the serving layer, see [Serving](serving.md). For API usage, see [API Reference](../api-reference/python.md).

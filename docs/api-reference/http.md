@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-The HTTP API is a FastAPI application in `apps/api/` that exposes KohakuTerrarium's serving layer over REST and WebSocket. It is an application, not part of the core library. For the underlying Python API, see [Serving Layer](../architecture/serving.md).
+The HTTP API is a FastAPI application in `apps/api/` that exposes KohakuTerrarium's serving layer over REST and WebSocket. It is an application, not part of the core library. For the underlying Python API, see [Serving Layer](../concepts/serving.md).
 
 ## Quick Start
 
