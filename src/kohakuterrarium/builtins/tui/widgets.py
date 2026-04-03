@@ -13,8 +13,10 @@ Gemstone color palette:
 import time
 
 from textual.containers import Vertical
+from textual.events import Key
+from textual.message import Message
 
-from textual.widgets import Collapsible, Static
+from textual.widgets import Collapsible, Static, TextArea
 
 
 # ── Tool Call Block ─────────────────────────────────────────────
@@ -52,7 +54,7 @@ class ToolBlock(Collapsible):
         color: #D4920A;
     }
     ToolBlock.-done > CollapsibleTitle {
-        color: #4C9989;
+        color: #5A4FCF;
     }
     ToolBlock.-error > CollapsibleTitle {
         color: #E74C3C;
@@ -155,7 +157,7 @@ class SubAgentBlock(Collapsible):
         color: #A57EAE;
     }
     SubAgentBlock.-done > CollapsibleTitle {
-        color: #4C9989;
+        color: #A57EAE;
     }
     SubAgentBlock.-error > CollapsibleTitle {
         color: #E74C3C;
@@ -172,7 +174,7 @@ class SubAgentBlock(Collapsible):
         color: #0F52BA;
     }
     .sa-tool-line.-done {
-        color: #4C9989;
+        color: #5A4FCF;
     }
     .sa-tool-line.-error {
         color: #E74C3C;
@@ -482,22 +484,42 @@ class SessionInfoPanel(Static):
         self._start_time = time.monotonic()
         self._input_tokens = 0
         self._output_tokens = 0
+        self._cached_tokens = 0
         self._last_prompt_tokens = 0
         self._compact_threshold = 0
         self._model = ""
         self._session_id = ""
+        self._agent_name = ""
 
-    def set_info(self, session_id: str = "", model: str = "", tokens: int = 0) -> None:
+    def set_info(
+        self, session_id: str = "", model: str = "", agent_name: str = ""
+    ) -> None:
         self._session_id = session_id
         self._model = model
+        self._agent_name = agent_name
         self._refresh()
 
     def add_usage(
-        self, prompt_tokens: int = 0, completion_tokens: int = 0, total: int = 0
+        self,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total: int = 0,
+        cached_tokens: int = 0,
     ) -> None:
         self._input_tokens += prompt_tokens
         self._output_tokens += completion_tokens
+        self._cached_tokens += cached_tokens
         self._last_prompt_tokens = prompt_tokens
+        self._refresh()
+
+    def restore_usage(
+        self, total_in: int, total_out: int, last_prompt: int, total_cached: int = 0
+    ) -> None:
+        """Set cumulative totals from session history (on resume)."""
+        self._input_tokens = total_in
+        self._output_tokens = total_out
+        self._cached_tokens = total_cached
+        self._last_prompt_tokens = last_prompt
         self._refresh()
 
     def add_tokens(self, count: int) -> None:
@@ -513,6 +535,8 @@ class SessionInfoPanel(Static):
         elapsed = time.monotonic() - self._start_time
         mins, secs = int(elapsed // 60), int(elapsed % 60)
         lines = []
+        if self._agent_name:
+            lines.append(f"Agent: {self._agent_name}")
         if self._session_id:
             lines.append(f"ID: {self._session_id[:20]}")
         if self._model:
@@ -520,16 +544,21 @@ class SessionInfoPanel(Static):
         lines.append(f"Runtime: {mins}m {secs}s")
         total = self._input_tokens + self._output_tokens
         if total > 0:
-            lines.append(
-                f"In: {_fmt_tokens(self._input_tokens)}  "
-                f"Out: {_fmt_tokens(self._output_tokens)}"
-            )
-        if self._compact_threshold > 0 and self._last_prompt_tokens > 0:
-            pct = int(self._last_prompt_tokens / self._compact_threshold * 100)
-            lines.append(
-                f"Context: {_fmt_tokens(self._last_prompt_tokens)}"
-                f"/{_fmt_tokens(self._compact_threshold)} ({pct}%)"
-            )
+            in_part = f"In: {_fmt_tokens(self._input_tokens)}"
+            if self._cached_tokens > 0:
+                in_part += f" (cache {_fmt_tokens(self._cached_tokens)})"
+            lines.append(f"{in_part}  Out: {_fmt_tokens(self._output_tokens)}")
+        if self._compact_threshold > 0:
+            if self._last_prompt_tokens > 0:
+                pct = int(self._last_prompt_tokens / self._compact_threshold * 100)
+                lines.append(
+                    f"Context: {_fmt_tokens(self._last_prompt_tokens)}"
+                    f"/{_fmt_tokens(self._compact_threshold)} ({pct}%)"
+                )
+            else:
+                lines.append(
+                    f"Compact: {_fmt_tokens(self._compact_threshold)}"
+                )
         self.update("\n".join(lines))
 
 
@@ -539,8 +568,7 @@ class SessionInfoPanel(Static):
 class CompactSummaryBlock(Collapsible):
     """Compact summary displayed as a collapsible accordion.
 
-    Sapphire color scheme to distinguish from tools (iolite) and
-    sub-agents (taaffeite).
+    Amber while compacting, aquamarine when done.
     """
 
     DEFAULT_CSS = """
@@ -556,7 +584,6 @@ class CompactSummaryBlock(Collapsible):
         padding: 0 1;
     }
     CompactSummaryBlock > CollapsibleTitle {
-        color: #0F52BA;
         background: transparent;
     }
     CompactSummaryBlock > CollapsibleTitle:hover {
@@ -564,6 +591,12 @@ class CompactSummaryBlock(Collapsible):
     }
     CompactSummaryBlock > CollapsibleTitle:focus {
         background: #0F52BA 15%;
+    }
+    CompactSummaryBlock.-running > CollapsibleTitle {
+        color: #D4920A;
+    }
+    CompactSummaryBlock.-done > CollapsibleTitle {
+        color: #0F52BA;
     }
     .compact-body {
         height: auto;
@@ -574,10 +607,21 @@ class CompactSummaryBlock(Collapsible):
     BUTTON_OPEN = "[-]"
     BUTTON_CLOSED = "[+]"
 
-    def __init__(self, round_num: int, summary: str, **kwargs):
+    def __init__(self, summary: str, done: bool = False, **kwargs):
         self._body = Static(summary, classes="compact-body")
-        title = f"\u25cf Context compacted (round {round_num})"
+        if done:
+            title = "\u25cf Context auto-compact"
+        else:
+            title = "\u25cb Context auto-compact"
         super().__init__(self._body, title=title, collapsed=True, **kwargs)
+        self.add_class("-done" if done else "-running")
+
+    def mark_done(self, summary: str) -> None:
+        """Transition from running (amber) to done (sapphire)."""
+        self._body.update(summary)
+        self.title = "\u25cf Context auto-compact"
+        self.remove_class("-running")
+        self.add_class("-done")
 
 
 class TerrariumPanel(Static):
@@ -631,6 +675,54 @@ class TerrariumPanel(Static):
                 ctype = ch.get("type", "queue")
                 lines.append(f"  {ch['name']}  ({ctype})")
         self.update("\n".join(lines) if lines else "(no topology)")
+
+
+# ── Chat Input ─────────────────────────────────────────────────
+
+
+class ChatInput(TextArea):
+    """Multi-line input. Enter sends, Shift+Enter or Ctrl+J inserts newline.
+
+    Ctrl+J works universally (including SSH) since it is the literal
+    newline character and does not depend on terminal modifier support.
+    """
+
+    DEFAULT_CSS = """
+    ChatInput {
+        height: auto;
+        min-height: 3;
+        max-height: 8;
+        border: solid #5A4FCF 30%;
+    }
+    ChatInput:focus {
+        border: solid #5A4FCF;
+    }
+    """
+
+    class Submitted(Message):
+        """Posted when the user presses Enter to send."""
+
+        def __init__(self, value: str) -> None:
+            super().__init__()
+            self.value = value
+
+    def _on_key(self, event: Key) -> None:
+        # Shift+Enter, Ctrl+Enter, Ctrl+J: insert newline
+        if event.key in ("shift+enter", "ctrl+enter", "ctrl+j"):
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")
+            return
+        # Plain Enter: send message
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            text = self.text.strip()
+            if text:
+                self.post_message(self.Submitted(text))
+                self.clear()
+            return
+        super()._on_key(event)
 
 
 # ── Helpers ─────────────────────────────────────────────────────
