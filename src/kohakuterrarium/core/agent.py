@@ -263,6 +263,45 @@ class Agent(AgentInitMixin, AgentHandlersMixin):
         self.compact_manager._agent_name = self.config.name
         if self.session_store:
             self.compact_manager._session_store = self.session_store
+            # Restore compact_count from session so round numbering continues
+            try:
+                saved_count = self.session_store.state.get(
+                    f"{self.config.name}:compact_count"
+                )
+                if saved_count is not None:
+                    self.compact_manager._compact_count = int(saved_count)
+                    logger.info(
+                        "Compact count restored",
+                        compact_count=self.compact_manager._compact_count,
+                    )
+            except (KeyError, TypeError, ValueError):
+                pass
+
+        # Push session info to output (for TUI session panel)
+        session_id = ""
+        if self.session_store:
+            try:
+                meta = self.session_store.load_meta()
+                session_id = meta.get("session_id", "")
+            except Exception:
+                pass
+
+        # Set prompt_cache_key on LLM provider for cache routing
+        if session_id and hasattr(self.llm, "prompt_cache_key"):
+            self.llm.prompt_cache_key = session_id
+            logger.info("Prompt cache key set", cache_key=session_id[:16])
+
+        model = getattr(self.config, "model", "") or ""
+        self.output_router.notify_activity(
+            "session_info",
+            "",
+            metadata={
+                "session_id": session_id,
+                "model": model,
+                "agent_name": self.config.name,
+                "compact_threshold": compact_cfg.max_tokens,
+            },
+        )
 
         if self._termination_checker:
             self._termination_checker.start()
@@ -363,8 +402,19 @@ class Agent(AgentInitMixin, AgentHandlersMixin):
 
         except KeyboardInterrupt:
             logger.info("Interrupted")
+        except asyncio.CancelledError:
+            logger.info("Agent cancelled")
         except Exception as e:
-            logger.error("Agent error", error=str(e))
+            logger.error("Fatal agent error", error=str(e))
+            # Try to show error in output before stopping
+            try:
+                error_type = type(e).__name__
+                await self.output_router.write(
+                    f"\n[Fatal Error] {error_type}: {e}\n"
+                )
+                await self.output_router.on_processing_end()
+            except Exception:
+                pass
             raise
         finally:
             await self.stop()

@@ -27,6 +27,10 @@ class SessionOutput(OutputModule):
         self._store = store
         self._agent = agent  # direct reference, not dict lookup
         self._text_buffer: list[str] = []
+        # Cumulative API token usage across the session
+        self._total_input_tokens: int = 0
+        self._total_output_tokens: int = 0
+        self._total_cached_tokens: int = 0
 
     def _record(self, event_type: str, data: dict) -> None:
         """Record an event."""
@@ -36,7 +40,15 @@ class SessionOutput(OutputModule):
             logger.debug("Session record failed", error=str(e))
 
     async def start(self) -> None:
-        pass
+        # Restore cumulative token totals from session state
+        try:
+            usage = self._store.state.get(f"{self._agent_name}:token_usage")
+            if isinstance(usage, dict):
+                self._total_input_tokens = usage.get("total_input_tokens", 0)
+                self._total_output_tokens = usage.get("total_output_tokens", 0)
+                self._total_cached_tokens = usage.get("total_cached_tokens", 0)
+        except (KeyError, TypeError):
+            pass
 
     async def stop(self) -> None:
         pass
@@ -125,6 +137,8 @@ class SessionOutput(OutputModule):
         "subagent_done": "_handle_subagent_done",
         "subagent_error": "_handle_subagent_error",
         "token_usage": "_handle_token_usage",
+        "compact_start": "_handle_compact_start",
+        "compact_complete": "_handle_compact_complete",
         "processing_complete": "_handle_processing_complete",
     }
 
@@ -222,12 +236,48 @@ class SessionOutput(OutputModule):
         )
 
     def _handle_token_usage(self, name: str, detail: str, metadata: dict) -> None:
+        prompt = metadata.get("prompt_tokens", 0)
+        completion = metadata.get("completion_tokens", 0)
+        cached = metadata.get("cached_tokens", 0)
+        self._total_input_tokens += prompt
+        self._total_output_tokens += completion
+        self._total_cached_tokens += cached
         self._record(
             "token_usage",
             {
-                "prompt_tokens": metadata.get("prompt_tokens", 0),
-                "completion_tokens": metadata.get("completion_tokens", 0),
+                "prompt_tokens": prompt,
+                "completion_tokens": completion,
                 "total_tokens": metadata.get("total_tokens", 0),
+                "cached_tokens": cached,
+            },
+        )
+        # Save cumulative totals to session state for fast resume
+        try:
+            self._store.save_state(
+                self._agent_name,
+                token_usage={
+                    "total_input_tokens": self._total_input_tokens,
+                    "total_output_tokens": self._total_output_tokens,
+                    "total_cached_tokens": self._total_cached_tokens,
+                    "last_prompt_tokens": prompt,
+                },
+            )
+        except Exception:
+            pass
+
+    def _handle_compact_start(self, name: str, detail: str, metadata: dict) -> None:
+        self._record(
+            "compact_start",
+            {"round": metadata.get("round", 0)},
+        )
+
+    def _handle_compact_complete(self, name: str, detail: str, metadata: dict) -> None:
+        self._record(
+            "compact_complete",
+            {
+                "round": metadata.get("round", 0),
+                "summary": metadata.get("summary", ""),
+                "messages_compacted": metadata.get("messages_compacted", 0),
             },
         )
 

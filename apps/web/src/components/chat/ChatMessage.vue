@@ -93,7 +93,7 @@
     >
       <span class="text-sapphire">&bull;</span>
       <span class="font-semibold text-sapphire dark:text-sapphire-light">
-        Context compacted (round {{ message.round }})
+        Context auto-compact
       </span>
       <span class="text-warm-400 text-[10px]">
         {{ message.messagesCompacted }} messages summarized

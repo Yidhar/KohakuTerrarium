@@ -119,6 +119,17 @@ class StreamOutput(OutputModule):
                 "prompt_tokens",
                 "completion_tokens",
                 "total_tokens",
+                "cached_tokens",
+                "round",
+                "summary",
+                "messages_compacted",
+                "session_id",
+                "model",
+                "agent_name",
+                "compact_threshold",
+                "background",
+                "subagent",
+                "tool",
             ):
                 if k in metadata:
                     msg[k] = metadata[k]

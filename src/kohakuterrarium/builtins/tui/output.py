@@ -3,11 +3,12 @@
 import asyncio
 from typing import Any
 
-from rich.markdown import Markdown as RichMarkdown
 from textual.containers import VerticalScroll
+from textual.widgets import Markdown
 
 from kohakuterrarium.builtins.tui.session import TUISession
 from kohakuterrarium.builtins.tui.widgets import (
+    CompactSummaryBlock,
     StreamingText,
     SubAgentBlock,
     ToolBlock,
@@ -205,7 +206,8 @@ class TUIOutput(BaseOutputModule):
                 prompt = metadata.get("prompt_tokens", 0)
                 completion = metadata.get("completion_tokens", 0)
                 total = metadata.get("total_tokens", 0)
-                self._tui.update_token_usage(prompt, completion, total)
+                cached = metadata.get("cached_tokens", 0)
+                self._tui.update_token_usage(prompt, completion, total, cached)
 
             # ── Compact lifecycle ──────────────────────────────
 
@@ -221,6 +223,17 @@ class TUIOutput(BaseOutputModule):
                 summary = metadata.get("summary", "")
                 self._tui.update_compact_summary(round_num, summary, target=t)
                 self._tui.update_running("compact", "", remove=True)
+
+            # ── Session info ───────────────────────────────────────
+
+            case "session_info":
+                session_id = metadata.get("session_id", "")
+                model = metadata.get("model", "")
+                agent_name = metadata.get("agent_name", "")
+                compact_threshold = metadata.get("compact_threshold", 0)
+                self._tui.update_session_info(session_id, model, agent_name)
+                if compact_threshold:
+                    self._tui.set_compact_threshold(compact_threshold)
 
             # ── Interrupt ───────────────────────────────────────
 
@@ -252,13 +265,19 @@ class TUIOutput(BaseOutputModule):
 
         turns = _group_into_turns(events)
 
-        # Collect token usage for session info
-        total_tokens = 0
+        # Restore cumulative token usage from event history
+        total_in = 0
+        total_out = 0
+        total_cached = 0
+        last_prompt = 0
         for _, data in _iter_all_steps(turns):
             if isinstance(data, dict) and data.get("type") == "token_usage":
-                total_tokens += data.get("total_tokens", 0)
-        if total_tokens:
-            self._tui.add_tokens(total_tokens)
+                total_in += data.get("prompt_tokens", 0)
+                total_out += data.get("completion_tokens", 0)
+                total_cached += data.get("cached_tokens", 0)
+                last_prompt = data.get("prompt_tokens", 0)
+        if total_in or total_out:
+            self._tui.restore_token_usage(total_in, total_out, last_prompt, total_cached)
 
         # Build and mount widgets on the Textual thread.
         # Widgets MUST be created inside the app context (Textual requirement).
@@ -369,6 +388,11 @@ def _group_into_turns(events: list[dict]) -> list[dict]:
                 "trigger_content": content,
                 "steps": [],
             }
+        elif etype in ("compact_start", "compact_complete"):
+            # Compact events may fire between turns (background task)
+            target = current if current else (turns[-1] if turns else None)
+            if target:
+                target["steps"].append((etype, evt))
         elif current is not None:
             if etype == "text":
                 # Merge consecutive text into one step
@@ -423,15 +447,8 @@ def _build_resume_widgets(turns: list[dict]) -> list:
             if step_type == "text":
                 text = data if isinstance(data, str) else str(data)
                 if text.strip():
-                    w = StreamingText()
-                    w._chunks = [text]
-                    # Use update() so Textual's Static stores the renderable
-                    # properly (setting _renderable directly gets lost on re-render)
-                    try:
-                        w.update(RichMarkdown(text))
-                    except Exception:
-                        w.update(text)
-                    widgets.append(w)
+                    # Use Textual Markdown widget (selectable text)
+                    widgets.append(Markdown(text))
 
             elif step_type == "tool_call":
                 raw_name = data.get("name", "tool")
@@ -532,6 +549,11 @@ def _build_resume_widgets(turns: list[dict]) -> list:
                         current_subagent.update_tool_line(
                             tool_name, done=False, error=True
                         )
+
+            elif step_type == "compact_complete":
+                round_num = data.get("round", 0) if isinstance(data, dict) else 0
+                summary = data.get("summary", "") if isinstance(data, dict) else ""
+                widgets.append(CompactSummaryBlock(summary, done=True))
 
     # Mark interrupted sub-agents
     if current_subagent:

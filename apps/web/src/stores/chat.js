@@ -235,7 +235,7 @@ function _replayEvents(messages, events) {
         content: evt.content || "",
         timestamp: "",
       });
-    } else if (t === "compact_summary") {
+    } else if (t === "compact_summary" || t === "compact_complete") {
       cur = null;
       result.push({
         id: "compact_" + result.length,
@@ -245,7 +245,7 @@ function _replayEvents(messages, events) {
         messagesCompacted: evt.messages_compacted || 0,
         timestamp: "",
       });
-    } else if (t === "token_usage" || t === "processing_complete") {
+    } else if (t === "token_usage" || t === "processing_complete" || t === "compact_start") {
       // skip
     }
   }
@@ -291,12 +291,14 @@ export const useChatStore = defineStore("chat", {
     /** @type {string[]} */
     tabs: [],
     processing: false,
-    /** @type {Object<string, {prompt: number, completion: number, total: number}>} Per-source token usage */
+    /** @type {Object<string, {prompt: number, completion: number, total: number, cached: number}>} Per-source token usage */
     tokenUsage: {},
     /** @type {Object<string, {name: string, type: string, startedAt: number}>} Running background jobs */
     runningJobs: {},
     /** @type {Object<string, number>} Unread message counts per tab */
     unreadCounts: {},
+    /** @type {{sessionId: string, model: string, agentName: string, compactThreshold: number}} Session metadata */
+    sessionInfo: { sessionId: "", model: "", agentName: "", compactThreshold: 0 },
     /** @type {string | null} */
     _instanceId: null,
     /** @type {string | null} */
@@ -321,6 +323,7 @@ export const useChatStore = defineStore("chat", {
       this._instanceType = instance.type;
       this.tabs = [];
       this.messagesByTab = {};
+      this.sessionInfo = { sessionId: "", model: "", agentName: "", compactThreshold: 0 };
 
       if (instance.type === "terrarium") {
         if (instance.has_root) {
@@ -498,16 +501,23 @@ export const useChatStore = defineStore("chat", {
     /** Restore token usage from event log (for page refresh) */
     _restoreTokenUsage(source, events) {
       for (const evt of events) {
-        if (evt.type === "activity" && evt.activity_type === "token_usage") {
+        // Handle both StreamOutput format (type=activity, activity_type=token_usage)
+        // and SessionStore format (type=token_usage directly)
+        const isTokenEvt =
+          (evt.type === "activity" && evt.activity_type === "token_usage") ||
+          evt.type === "token_usage";
+        if (isTokenEvt) {
           const prev = this.tokenUsage[source] || {
             prompt: 0,
             completion: 0,
             total: 0,
+            cached: 0,
           };
           this.tokenUsage[source] = {
-            prompt: evt.prompt_tokens || prev.prompt,
+            prompt: prev.prompt + (evt.prompt_tokens || 0),
             completion: prev.completion + (evt.completion_tokens || 0),
-            total: evt.total_tokens || prev.total,
+            total: prev.total + (evt.total_tokens || 0),
+            cached: prev.cached + (evt.cached_tokens || 0),
           };
         }
       }
@@ -545,17 +555,30 @@ export const useChatStore = defineStore("chat", {
       const at = data.activity_type;
       const name = data.name || "unknown";
 
+      // Session info: model, compact threshold, session ID, agent name
+      if (at === "session_info") {
+        this.sessionInfo = {
+          sessionId: data.session_id || "",
+          model: data.model || "",
+          agentName: data.agent_name || "",
+          compactThreshold: data.compact_threshold || 0,
+        };
+        return;
+      }
+
       // Token usage: always track, even without open tab
       if (at === "token_usage") {
         const prev = this.tokenUsage[source] || {
           prompt: 0,
           completion: 0,
           total: 0,
+          cached: 0,
         };
         this.tokenUsage[source] = {
-          prompt: data.prompt_tokens || prev.prompt,
+          prompt: prev.prompt + (data.prompt_tokens || 0),
           completion: prev.completion + (data.completion_tokens || 0),
-          total: data.total_tokens || prev.total,
+          total: prev.total + (data.total_tokens || 0),
+          cached: prev.cached + (data.cached_tokens || 0),
         };
         return;
       }
