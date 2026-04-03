@@ -18,6 +18,7 @@ from textual.widgets import Footer, Header, Markdown, Static, TabbedContent, Tab
 from kohakuterrarium.builtins.tui.widgets import (
     ChatInput,
     CompactSummaryBlock,
+    QueuedMessage,
     RunningPanel,
     ScratchpadPanel,
     SessionInfoPanel,
@@ -81,9 +82,10 @@ class AgentTUI(App):
         self.agent_name = agent_name
         # Terrarium tabs: ["root", "swe", "reviewer", "#tasks", "#review"]
         self._terrarium_tabs = terrarium_tabs
-        self._input_ready = asyncio.Event()
-        self._input_value: str = ""
+        self._input_queue: asyncio.Queue[str] = asyncio.Queue()
         self._stop_event = asyncio.Event()
+        self._queued_widgets: list[QueuedMessage] = []
+        self._is_processing = False
         self._mounted_event = asyncio.Event()
         self._thinking_active = False
         self._thinking_thread: threading.Thread | None = None
@@ -128,10 +130,45 @@ class AgentTUI(App):
             return
         chat = self._get_active_chat()
         if chat:
-            chat.mount(UserMessage(text))
+            if self._is_processing:
+                # Agent is busy: show as queued (dashed amber border)
+                qw = QueuedMessage(text)
+                self._queued_widgets.append(qw)
+                chat.mount(qw)
+            else:
+                chat.mount(UserMessage(text))
             chat.scroll_end(animate=False)
-        self._input_value = text
-        self._input_ready.set()
+        self._input_queue.put_nowait(text)
+
+    def on_chat_input_edit_queued(self, event: ChatInput.EditQueued) -> None:
+        """Pull the last queued message back into the input box for editing."""
+        if not self._queued_widgets:
+            return
+        qw = self._queued_widgets.pop()
+        text = qw.message_text
+        # Remove from chat and queue
+        qw.remove()
+        # Drain this message from the asyncio queue
+        try:
+            # Queue is FIFO; the message we want is the last one.
+            # Rebuild queue without the last item.
+            items = []
+            while not self._input_queue.empty():
+                items.append(self._input_queue.get_nowait())
+            if items:
+                items.pop()  # remove the last (most recent queued message)
+            for item in items:
+                self._input_queue.put_nowait(item)
+        except Exception:
+            pass
+        # Put text back in input box
+        try:
+            inp = self.query_one("#input-box", ChatInput)
+            inp.clear()
+            inp.insert(text)
+            inp.focus()
+        except Exception:
+            pass
 
     def _get_active_chat(self) -> VerticalScroll | None:
         """Get the currently visible chat scroll widget."""
@@ -170,9 +207,8 @@ class AgentTUI(App):
             chat.remove_children()
 
     def action_quit(self) -> None:
-        self._input_value = ""
         self._stop_event.set()
-        self._input_ready.set()
+        self._input_queue.put_nowait("")  # empty string signals exit
         self.exit()
 
     # ── Thinking animation ──────────────────────────────────────
@@ -643,6 +679,14 @@ class TUISession:
 
     def start_thinking(self) -> None:
         if self._app and self._app.is_running:
+            self._app._is_processing = True
+            # Promote any queued messages to normal (agent will process them)
+            for qw in self._app._queued_widgets:
+                try:
+                    qw.promote()
+                except Exception:
+                    pass
+            self._app._queued_widgets.clear()
             try:
                 self._app.start_thinking_animation()
             except Exception:
@@ -657,6 +701,7 @@ class TUISession:
 
     def set_idle(self) -> None:
         if self._app and self._app.is_running:
+            self._app._is_processing = False
             try:
                 self._app.query_one("#quick-status", Static).update(IDLE_STATUS)
             except Exception:
@@ -693,21 +738,18 @@ class TUISession:
         finally:
             self.running = False
             self._stop_event.set()
-            self._app._input_ready.set()
+            self._app._input_queue.put_nowait("")  # unblock get_input
 
     async def get_input(self, prompt: str = "You: ") -> str:
         if not self._app:
             return ""
-        self._app._input_ready.clear()
-        self._app._input_value = ""
-        await self._app._input_ready.wait()
-        return self._app._input_value
+        return await self._app._input_queue.get()
 
     def stop(self) -> None:
         self.running = False
         self._stop_event.set()
         if self._app:
-            self._app._input_ready.set()
+            self._app._input_queue.put_nowait("")  # unblock get_input
             if self._app.is_running:
                 self._app.exit()
 

@@ -351,6 +351,35 @@ class UserMessage(Static):
         self.border_title = "You"
 
 
+class QueuedMessage(Static):
+    """User message queued while agent is processing. Visually distinct (dashed border)."""
+
+    DEFAULT_CSS = """
+    QueuedMessage {
+        height: auto;
+        margin: 1 0 0 0;
+        padding: 0 1;
+        border: dashed #D4920A 50%;
+        border-title-color: #D4920A;
+        border-title-align: left;
+        color: $text-muted;
+    }
+    """
+
+    def __init__(self, text: str, **kwargs):
+        super().__init__(text, **kwargs)
+        self.border_title = "Queued"
+        self.message_text = text
+
+    def promote(self) -> None:
+        """Convert to a normal UserMessage (when agent picks it up)."""
+        self.border_title = "You"
+        self.remove_class("-queued")
+        self.styles.border = ("round", "#5A4FCF")
+        self.styles.border_title_color = "#5A4FCF"
+        self.styles.color = None
+
+
 class TriggerMessage(Collapsible):
     """Channel/trigger message as a collapsible accordion.
 
@@ -740,6 +769,11 @@ class ChatInput(TextArea):
             super().__init__()
             self.value = value
 
+    class EditQueued(Message):
+        """Posted when user presses Up on empty input to edit last queued message."""
+
+        pass
+
     def _on_key(self, event: Key) -> None:
         # Shift+Enter, Ctrl+Enter, Ctrl+J: insert newline
         if event.key in ("shift+enter", "ctrl+enter", "ctrl+j"):
@@ -755,6 +789,12 @@ class ChatInput(TextArea):
             if text:
                 self.post_message(self.Submitted(text))
                 self.clear()
+            return
+        # Up arrow on empty input: edit last queued message
+        if event.key == "up" and not self.text.strip():
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.EditQueued())
             return
         super()._on_key(event)
 
