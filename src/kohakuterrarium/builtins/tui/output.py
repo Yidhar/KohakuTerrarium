@@ -198,7 +198,7 @@ class TUIOutput(BaseOutputModule):
                 sender = metadata.get("sender", "")
                 content = metadata.get("content", "")
                 label = f"[{channel}] {sender}" if channel else name
-                self._tui.add_trigger_message(label, content[:500], target=t)
+                self._tui.add_trigger_message(label, content, target=t)
 
             # ── Token usage ─────────────────────────────��───────
 

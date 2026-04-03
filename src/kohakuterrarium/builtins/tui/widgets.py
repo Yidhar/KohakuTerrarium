@@ -351,22 +351,56 @@ class UserMessage(Static):
         self.border_title = "You"
 
 
-class TriggerMessage(Static):
+class TriggerMessage(Collapsible):
+    """Channel/trigger message as a collapsible accordion.
+
+    Title shows the label (channel + sender), body shows the full content.
+    Amber color scheme to match trigger theme.
+    """
+
     DEFAULT_CSS = """
     TriggerMessage {
         height: auto;
         margin: 1 0 0 0;
+        padding: 0;
+    }
+    TriggerMessage > Contents {
+        height: auto;
+        max-height: 12;
+        overflow-y: auto;
         padding: 0 1;
-        border: round #D4920A;
-        border-title-color: #D4920A;
-        border-title-align: left;
+    }
+    TriggerMessage > CollapsibleTitle {
+        color: #D4920A;
+        background: transparent;
+    }
+    TriggerMessage > CollapsibleTitle:hover {
+        background: #D4920A 15%;
+    }
+    TriggerMessage > CollapsibleTitle:focus {
+        background: #D4920A 15%;
+    }
+    .trigger-body {
+        height: auto;
+        color: $text-muted;
     }
     """
 
+    BUTTON_OPEN = "[-]"
+    BUTTON_CLOSED = "[+]"
+
     def __init__(self, label: str, content: str = "", **kwargs):
-        display = f"{label}\n{content}" if content else label
-        super().__init__(display, **kwargs)
-        self.border_title = "Trigger"
+        preview = content[:80].replace("\n", " ") if content else ""
+        title = f"\u25cf {label}"
+        if preview:
+            title += f"  {preview}"
+        self._body = Static(content, classes="trigger-body")
+        super().__init__(
+            self._body,
+            title=title,
+            collapsed=bool(content),
+            **kwargs,
+        )
 
 
 class StreamingText(Static):
