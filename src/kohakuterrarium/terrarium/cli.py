@@ -2,6 +2,8 @@
 
 import argparse
 import asyncio
+from contextlib import suppress
+import os
 from pathlib import Path
 
 from kohakuterrarium.builtins.tui.output import TUIOutput
@@ -38,10 +40,19 @@ async def run_terrarium_with_tui(runtime: TerrariumRuntime) -> None:
         await asyncio.sleep(0.25)
         if runtime.is_running and runtime.root_agent:
             break
+        if runtime_task.done():
+            break
 
     root = runtime.root_agent
     if not root:
+        if runtime_task.done():
+            try:
+                await runtime_task
+            except Exception as exc:
+                raise RuntimeError(f"Terrarium failed to start: {exc}") from exc
         runtime_task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await runtime_task
         raise RuntimeError("Root agent not available after runtime start")
 
     # Build tab list
@@ -228,6 +239,10 @@ def add_terrarium_subparser(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Disable session persistence",
     )
+    run_p.add_argument(
+        "--pwd",
+        help="Runtime working directory / workspace root",
+    )
 
     # terrarium info <path>
     info_p = terrarium_sub.add_parser("info", help="Show terrarium info")
@@ -250,10 +265,18 @@ def _run_terrarium_cli(args: argparse.Namespace) -> int:
     """Run a terrarium from CLI."""
     set_level(args.log_level)
 
-    path = Path(args.terrarium_path)
+    path = Path(args.terrarium_path).expanduser().resolve()
     if not path.exists():
         print(f"Error: Path not found: {args.terrarium_path}")
         return 1
+
+    runtime_pwd = getattr(args, "pwd", None)
+    if runtime_pwd:
+        workspace = Path(runtime_pwd).expanduser().resolve()
+        if not workspace.exists() or not workspace.is_dir():
+            print(f"Error: Working directory not found: {runtime_pwd}")
+            return 1
+        os.chdir(workspace)
 
     try:
         config = load_terrarium_config(str(path))

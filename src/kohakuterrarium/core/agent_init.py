@@ -89,8 +89,6 @@ class AgentInitMixin:
             if isinstance(self.config.tool_format, str)
             else "bracket"
         )
-        if self.config.agent_path:
-            self.executor._working_dir = self.config.agent_path
         if hasattr(self.config, "agent_path") and self.config.agent_path:
             memory_config = getattr(self.config, "memory", None)
             if isinstance(memory_config, dict) and memory_config.get("path"):

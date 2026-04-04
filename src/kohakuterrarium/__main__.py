@@ -14,14 +14,17 @@ Show agent info:
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
+from typing import Iterable
 
 import yaml
 from dotenv import load_dotenv
 
 from kohakuterrarium.core.agent import Agent
 from kohakuterrarium.llm.codex_auth import CodexTokens, oauth_login
+from kohakuterrarium.packages import resolve_package_path
 from kohakuterrarium.session.resume import (
     detect_session_type,
     resume_agent,
@@ -35,24 +38,99 @@ from kohakuterrarium.terrarium.cli import (
 from kohakuterrarium.utils.logging import set_level
 
 
-def _load_local_dotenv() -> None:
-    """Load the nearest .env from the current working directory upward."""
-    cwd = Path.cwd()
-    search_roots = [cwd, *cwd.parents]
-    for root in search_roots:
-        dotenv_path = root / ".env"
-        if dotenv_path.exists():
-            load_dotenv(dotenv_path=dotenv_path, override=False)
-            break
+def _load_local_dotenv(
+    start_dirs: str | Path | Iterable[str | Path] | None = None,
+) -> Path | None:
+    """Load one or more local .env files from ordered search roots upward.
+
+    Earlier candidates win. Later .env files only fill in variables that
+    were still unset because we always call ``load_dotenv(..., override=False)``.
+    """
+    if start_dirs is None:
+        candidates: list[Path] = [Path.cwd()]
+    elif isinstance(start_dirs, (str, Path)):
+        candidates = [Path(start_dirs).expanduser().resolve()]
+    else:
+        candidates = []
+        for start_dir in start_dirs:
+            if start_dir is None:
+                continue
+            candidates.append(Path(start_dir).expanduser().resolve())
+
+    seen: set[Path] = set()
+    loaded: list[Path] = []
+    for candidate in candidates:
+        search_roots = [candidate, *candidate.parents]
+        for root in search_roots:
+            dotenv_path = root / ".env"
+            if dotenv_path in seen:
+                continue
+            seen.add(dotenv_path)
+            if dotenv_path.exists():
+                load_dotenv(dotenv_path=dotenv_path, override=False)
+                loaded.append(dotenv_path)
+    return loaded[0] if loaded else None
+
+
+def _resolve_runtime_pwd(pwd: str | None) -> Path | None:
+    """Resolve a user-provided runtime working directory."""
+    if not pwd:
+        return None
+    return Path(pwd).expanduser().resolve()
+
+
+def _resolve_config_reference(path_value: str | None) -> Path | None:
+    """Resolve a config path or @package reference to an absolute path."""
+    if not path_value:
+        return None
+    if path_value.startswith("@"):
+        try:
+            return resolve_package_path(path_value)
+        except Exception:
+            return None
+    return Path(path_value).expanduser().resolve()
+
+
+def _detect_dotenv_starts(args: argparse.Namespace) -> list[Path]:
+    """Pick directories whose upward trees should be searched for .env."""
+    candidates: list[Path] = []
+
+    def add_candidate(path: Path | None) -> None:
+        if path is not None and path not in candidates:
+            candidates.append(path)
+
+    pwd_arg = getattr(args, "pwd", None)
+    if pwd_arg:
+        add_candidate(Path(pwd_arg).expanduser().resolve())
+
+    if args.command == "run":
+        add_candidate(_resolve_config_reference(getattr(args, "agent_path", None)))
+    elif args.command == "terrarium":
+        add_candidate(
+            _resolve_config_reference(getattr(args, "terrarium_path", None))
+        )
+
+    if args.command == "resume":
+        session_path = _resolve_session(getattr(args, "session", None), last=args.last)
+        if session_path and session_path.exists():
+            store = SessionStore(session_path)
+            try:
+                meta = store.load_meta()
+            finally:
+                store.close()
+            saved_pwd = meta.get("pwd")
+            if saved_pwd:
+                add_candidate(Path(saved_pwd).expanduser().resolve())
+            config_path = meta.get("config_path")
+            if config_path:
+                add_candidate(Path(config_path).expanduser().resolve())
+
+    add_candidate(Path.cwd())
+    return candidates
 
 
 def main() -> int:
     """Main CLI entry point."""
-    # Load environment variables from a local .env file if present.
-    # This lets commands like `kt run ...` and `kt terrarium run ...`
-    # pick up API keys/base URLs without requiring manual export first.
-    _load_local_dotenv()
-
     parser = argparse.ArgumentParser(
         prog="kt",
         description="KohakuTerrarium - Universal Agent Framework",
@@ -82,6 +160,10 @@ def main() -> int:
         "--no-session",
         action="store_true",
         help="Disable session persistence",
+    )
+    run_parser.add_argument(
+        "--pwd",
+        help="Runtime working directory / workspace root",
     )
 
     # List command
@@ -168,15 +250,23 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    # Load environment variables from the effective runtime workspace.
+    # This lets commands like `kt run ... --pwd X` or `kt resume` pick up
+    # the workspace-local .env rather than the shell's launch directory.
+    _load_local_dotenv(_detect_dotenv_starts(args))
+
     if args.command == "run":
         # Resolve @package references in agent_path
         agent_path = args.agent_path
         if agent_path.startswith("@"):
-            from kohakuterrarium.packages import resolve_package_path
-
             agent_path = str(resolve_package_path(agent_path))
         session = None if args.no_session else args.session
-        return run_agent_cli(agent_path, args.log_level, session=session)
+        return run_agent_cli(
+            agent_path,
+            args.log_level,
+            session=session,
+            pwd=args.pwd,
+        )
     elif args.command == "resume":
         return resume_cli(
             args.session, args.pwd, args.log_level, last=args.last, io_mode=args.mode
@@ -191,8 +281,6 @@ def main() -> int:
         # Resolve @package references in terrarium path
         if hasattr(args, "terrarium_path") and args.terrarium_path:
             if args.terrarium_path.startswith("@"):
-                from kohakuterrarium.packages import resolve_package_path
-
                 args.terrarium_path = str(resolve_package_path(args.terrarium_path))
         return handle_terrarium_command(args)
     elif args.command == "login":
@@ -211,14 +299,19 @@ def main() -> int:
 _SESSION_DIR = Path.home() / ".kohakuterrarium" / "sessions"
 
 
-def run_agent_cli(agent_path: str, log_level: str, session: str | None = None) -> int:
+def run_agent_cli(
+    agent_path: str,
+    log_level: str,
+    session: str | None = None,
+    pwd: str | None = None,
+) -> int:
     """Run an agent from CLI."""
 
     # Setup logging
     set_level(log_level)
 
     # Check path exists
-    path = Path(agent_path)
+    path = Path(agent_path).expanduser().resolve()
     if not path.exists():
         print(f"Error: Agent path not found: {agent_path}")
         return 1
@@ -233,6 +326,13 @@ def run_agent_cli(agent_path: str, log_level: str, session: str | None = None) -
     store = None
     session_file = None
     try:
+        runtime_pwd = _resolve_runtime_pwd(pwd)
+        if runtime_pwd:
+            if not runtime_pwd.exists() or not runtime_pwd.is_dir():
+                print(f"Error: Working directory not found: {pwd}")
+                return 1
+            os.chdir(runtime_pwd)
+
         # Create agent
         agent = Agent.from_path(str(path))
 
