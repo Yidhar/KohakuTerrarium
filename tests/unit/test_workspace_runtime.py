@@ -13,7 +13,7 @@ from kohakuterrarium.core.session import Session
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_DIR = PROJECT_ROOT
-AGENT_DIR = PROJECT_ROOT / "creatures" / "swe"
+AGENT_DIR = PROJECT_ROOT / "examples" / "agent-apps" / "swe_agent"
 LAUNCH_DIR = PROJECT_ROOT / "terrariums" / "swe_team"
 
 

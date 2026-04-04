@@ -6,7 +6,7 @@ version: "1.0"
 
 # LLM Configuration - Controller (orchestration)
 controller:
-  model: "${OPENROUTER_MODEL:google/gemini-3-flash-preview}"
+  model: "${OPENROUTER_MODEL:google/gemini-3.1-pro-preview}"
   temperature: 0.7
   max_tokens: 65536
   api_key_env: OPENROUTER_API_KEY
@@ -73,3 +73,6 @@ memory:
     - context.md
     - facts.md
     - preferences.md
+
+compact:
+  max_tokens: 1000000

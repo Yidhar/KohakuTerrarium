@@ -68,6 +68,7 @@ class TUIInput(BaseInputModule):
         # Build and launch the Textual app
         await self._tui.start(self._prompt)
         self._app_task = asyncio.create_task(self._tui.run_app())
+        await self._tui.wait_ready()
         logger.debug("TUI input started", session_key=self._session_key)
 
     async def _on_stop(self) -> None:

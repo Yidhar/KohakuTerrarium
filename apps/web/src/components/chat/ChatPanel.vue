@@ -46,13 +46,28 @@
         </button>
       </div>
 
-      <!-- Token usage for active tab -->
+      <!-- Token usage + session info for active tab -->
       <div
-        v-if="activeTokens > 0"
-        class="flex items-center gap-1 px-2 py-2 -mb-px text-[10px] text-warm-400 font-mono"
+        v-if="activeTokens > 0 || chat.sessionInfo.model"
+        class="flex items-center gap-2 px-2 py-2 -mb-px text-[10px] text-warm-400 font-mono"
       >
-        <span class="i-carbon-meter text-amber" />
-        <span>{{ formatTokens(activeTokens) }}</span>
+        <template v-if="chat.sessionInfo.model">
+          <span class="text-warm-500 dark:text-warm-400">{{ chat.sessionInfo.model }}</span>
+          <span class="text-warm-300 dark:text-warm-600">|</span>
+        </template>
+        <template v-if="activeTokens > 0">
+          <span class="i-carbon-meter text-amber" />
+          <span title="Cumulative input tokens">In: {{ formatTokens(activeUsage.prompt) }}</span>
+          <span v-if="activeUsage.cached > 0" class="text-aquamarine" title="Cached input tokens">(cache {{ formatTokens(activeUsage.cached) }})</span>
+          <span title="Cumulative output tokens">Out: {{ formatTokens(activeUsage.completion) }}</span>
+        </template>
+        <template v-if="chat.sessionInfo.compactThreshold > 0 && activeUsage.prompt > 0">
+          <span class="text-warm-300 dark:text-warm-600">|</span>
+          <span
+            :class="contextPct >= 80 ? 'text-coral' : contextPct >= 60 ? 'text-amber' : ''"
+            :title="`Context: ${formatTokens(activeUsage.prompt)} / ${formatTokens(chat.sessionInfo.compactThreshold)}`"
+          >Ctx: {{ contextPct }}%</span>
+        </template>
       </div>
 
       <!-- Tab bar bottom border (bubble top border) -->
@@ -200,11 +215,18 @@ const inputText = ref("");
 const messagesEl = ref(null);
 const inputEl = ref(null);
 
-const activeTokens = computed(() => {
+const activeUsage = computed(() => {
   const tab = chat.activeTab;
-  if (!tab) return 0;
-  const usage = chat.tokenUsage[tab];
-  return usage?.total || 0;
+  if (!tab) return { prompt: 0, completion: 0, total: 0 };
+  return chat.tokenUsage[tab] || { prompt: 0, completion: 0, total: 0 };
+});
+
+const activeTokens = computed(() => activeUsage.value.total);
+
+const contextPct = computed(() => {
+  const threshold = chat.sessionInfo.compactThreshold;
+  if (!threshold || !activeUsage.value.prompt) return 0;
+  return Math.min(100, Math.round((activeUsage.value.prompt / threshold) * 100));
 });
 
 function formatTokens(n) {

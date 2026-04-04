@@ -9,6 +9,8 @@ Heavy initialization logic is delegated to bootstrap.* factory modules
 to reduce import fan-out.
 """
 
+from pathlib import Path
+
 from kohakuterrarium.bootstrap.io import create_input, create_output
 from kohakuterrarium.bootstrap.llm import create_llm_provider
 from kohakuterrarium.bootstrap.subagents import init_subagents
@@ -89,6 +91,9 @@ class AgentInitMixin:
             if isinstance(self.config.tool_format, str)
             else "bracket"
         )
+        # Working dir = where the user ran kt, NOT the agent config folder.
+        # agent_path is for resolving config-relative paths (prompts, custom tools).
+        self.executor._working_dir = Path.cwd()
         if hasattr(self.config, "agent_path") and self.config.agent_path:
             memory_config = getattr(self.config, "memory", None)
             if isinstance(memory_config, dict) and memory_config.get("path"):
@@ -124,6 +129,8 @@ class AgentInitMixin:
             max_depth=self.config.max_subagent_depth,
             tool_format=parent_tool_format,
         )
+        # Inherit parent's tool context builder (working_dir, file guards, etc.)
+        self.subagent_manager._parent_executor = self.executor
 
         init_subagents(self.config, self.subagent_manager, self.registry, self._loader)
 
@@ -196,7 +203,6 @@ class AgentInitMixin:
             include_job_status=True,
             include_tools_list=False,  # Already in aggregated prompt
             max_messages=self.config.max_messages,
-            max_context_chars=self.config.max_context_chars,
             ephemeral=self.config.ephemeral,
             known_outputs=getattr(self, "_known_outputs", set()),
             tool_format=tool_format_name,

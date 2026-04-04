@@ -165,6 +165,12 @@ def main() -> int:
         "--pwd",
         help="Runtime working directory / workspace root",
     )
+    run_parser.add_argument(
+        "--mode",
+        choices=["cli", "tui"],
+        default="tui",
+        help="Input/output mode (default: tui)",
+    )
 
     # List command
     list_parser = subparsers.add_parser("list", help="List available agents")
@@ -203,8 +209,8 @@ def main() -> int:
     resume_parser.add_argument(
         "--mode",
         choices=["cli", "tui"],
-        default=None,
-        help="Override input/output mode (cli=stdout, inline=rich+prompt_toolkit, tui=textual)",
+        default="tui",
+        help="Input/output mode (default: tui)",
     )
     resume_parser.add_argument(
         "--log-level",
@@ -266,6 +272,7 @@ def main() -> int:
             args.log_level,
             session=session,
             pwd=args.pwd,
+            io_mode=args.mode,
         )
     elif args.command == "resume":
         return resume_cli(
@@ -304,6 +311,7 @@ def run_agent_cli(
     log_level: str,
     session: str | None = None,
     pwd: str | None = None,
+    io_mode: str | None = None,
 ) -> int:
     """Run an agent from CLI."""
 
@@ -333,8 +341,17 @@ def run_agent_cli(
                 return 1
             os.chdir(runtime_pwd)
 
+        # Create IO module overrides if mode specified
+        io_kwargs: dict = {}
+        if io_mode:
+            from kohakuterrarium.session.resume import _create_io_modules
+
+            inp, out = _create_io_modules(io_mode)
+            io_kwargs["input_module"] = inp
+            io_kwargs["output_module"] = out
+
         # Create agent
-        agent = Agent.from_path(str(path))
+        agent = Agent.from_path(str(path), **io_kwargs)
 
         # Attach session store (default: ON)
         if session is not None:

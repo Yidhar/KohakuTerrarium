@@ -1,13 +1,13 @@
 ---
 name: edit
-description: Edit file via search/replace or unified diff (must read first)
+description: Edit file via search/replace (path, old, new) or unified diff (path, diff). Use info(edit) first.
 category: builtin
 tags: [file, io, edit, diff, patch]
 ---
 
 # edit
 
-Edit files using search/replace or unified diff. Supports two modes, auto-detected from arguments.
+Edit files using search/replace or unified diff. Mode is auto-detected from arguments.
 
 ## SAFETY
 
@@ -24,14 +24,14 @@ Find an exact string and replace it.
 | Arg | Type | Description |
 |-----|------|-------------|
 | path | @@arg | Path to file (required) |
-| old_string | @@arg | Exact text to find (required) |
-| new_string | @@arg | Replacement text (required) |
+| old | @@arg | Exact text to find (required) |
+| new | @@arg | Replacement text (required) |
 | replace_all | @@arg | Replace all occurrences (default: false) |
 
 ### Rules
 
-- old_string must match the file content EXACTLY (including whitespace)
-- If old_string appears multiple times and replace_all is false, provide more context to make it unique
+- old must match the file content EXACTLY (including whitespace)
+- If old appears multiple times and replace_all is false, provide more context to make it unique
 - Set replace_all=true to replace every occurrence (useful for renaming)
 
 ### Example
@@ -39,8 +39,8 @@ Find an exact string and replace it.
 ```
 tool call: edit(
   path: src/main.py
-  old_string: def hello():
-  new_string: def greet():
+  old: def hello():
+  new: def greet():
 )
 ```
 

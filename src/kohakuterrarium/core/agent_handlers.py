@@ -7,6 +7,7 @@ the main Agent class to keep file sizes manageable.
 """
 
 import asyncio
+import importlib
 from dataclasses import dataclass, field
 
 from kohakuterrarium.core.controller import Controller
@@ -57,8 +58,6 @@ class AgentHandlersMixin:
 
     async def _restore_triggers(self, saved_triggers: list[dict]) -> None:
         """Re-create resumable triggers from saved state."""
-        import importlib
-
         for saved in saved_triggers:
             trigger_id = saved.get("trigger_id", "")
             type_name = saved.get("type", "")
@@ -160,9 +159,9 @@ class AgentHandlersMixin:
     ) -> None:
         """Process a single event through the specified controller.
 
-        Orchestrates the full cycle: push event, run LLM turns in a loop,
-        dispatch tools/sub-agents, collect results, push feedback, and
-        finalize output. See ``_run_controller_loop`` for the inner loop.
+        The controller loop runs as a cancellable task. interrupt() cancels
+        it directly, which propagates CancelledError through whatever is
+        awaiting (LLM stream, tool gather, etc.) for immediate stop.
         """
         self._prepare_processing_cycle(event, controller)
         await controller.push_event(event)
@@ -209,6 +208,19 @@ class AgentHandlersMixin:
 
             round_result = await self._run_single_turn(controller)
             all_round_text.extend(round_result.text_output)
+
+            # Emit token usage after each LLM turn (real-time update)
+            self._emit_token_usage(controller)
+
+            # Check interrupt after LLM turn (before waiting for tools)
+            if self._interrupt_requested:
+                self._cancel_direct_tasks(round_result.direct_tasks)
+                self._interrupt_requested = False
+                controller._interrupted = False
+                self.output_router.notify_activity(
+                    "interrupt", "[system] Processing interrupted"
+                )
+                break
 
             # Termination check
             if self._check_termination(round_result.text_output):
@@ -415,6 +427,9 @@ class AgentHandlersMixin:
 
         # Direct tool results
         native_results_added = False
+        if direct_tasks and self._interrupt_requested:
+            self._cancel_direct_tasks(direct_tasks)
+            return False
         if direct_tasks:
             logger.info("Waiting for %d direct tool(s)", len(direct_tasks))
             if native_mode and native_tool_call_ids:
@@ -455,18 +470,8 @@ class AgentHandlersMixin:
         controller: Controller,
         all_round_text: list[str],
     ) -> None:
-        """Finalize: flush output, emit usage, notify processing end."""
+        """Finalize: flush output, notify processing end."""
         await self._flush_output()
-
-        # Emit token usage
-        usage = getattr(controller, "_last_usage", {})
-        if usage:
-            self.output_router.notify_activity(
-                "token_usage",
-                f"tokens: {usage.get('prompt_tokens', 0)} in, "
-                f"{usage.get('completion_tokens', 0)} out",
-                metadata=usage,
-            )
 
         # Channel-triggered event notification
         trigger_channel = event.context.get("channel") if event.context else None
@@ -539,6 +544,31 @@ class AgentHandlersMixin:
                 self.output_router.clear_all()
                 if controller.is_ephemeral:
                     controller.flush()
+
+        # Check if auto-compact should trigger
+        if hasattr(self, "compact_manager") and self.compact_manager:
+            last_usage = getattr(controller, "_last_usage", {})
+            prompt_tokens = last_usage.get("prompt_tokens", 0)
+            if self.compact_manager.should_compact(prompt_tokens):
+                self.compact_manager.trigger_compact()
+
+    def _emit_token_usage(self, controller: Controller) -> None:
+        """Emit token usage from the last LLM turn to output."""
+        usage = getattr(controller, "_last_usage", {})
+        if usage:
+            self.output_router.notify_activity(
+                "token_usage",
+                f"tokens: {usage.get('prompt_tokens', 0)} in, "
+                f"{usage.get('completion_tokens', 0)} out",
+                metadata=usage,
+            )
+
+    def _cancel_direct_tasks(self, tasks: dict[str, asyncio.Task]) -> None:
+        """Cancel all running direct tool tasks (on interrupt)."""
+        for job_id, task in tasks.items():
+            if not task.done():
+                task.cancel()
+                logger.debug("Cancelled direct task", job_id=job_id)
 
     # ------------------------------------------------------------------
     # Output helpers

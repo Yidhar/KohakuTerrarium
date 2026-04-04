@@ -3,7 +3,7 @@ Edit tool - modify files via unified diff or search/replace.
 
 Supports two modes (auto-detected from arguments):
 - **Unified diff**: ``path`` + ``diff`` args. Multi-hunk, context-aware.
-- **Search/replace**: ``path`` + ``old_string`` + ``new_string`` args.
+- **Search/replace**: ``path`` + ``old`` + ``new`` args.
   Simple single-string replacement with optional ``replace_all``.
 """
 
@@ -219,6 +219,7 @@ class EditTool(BaseTool):
     """
 
     needs_context = True
+    require_manual_read = True
 
     @property
     def tool_name(self) -> str:
@@ -226,7 +227,7 @@ class EditTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Edit file via search/replace or unified diff (must read first)"
+        return "Edit file via search/replace (path, old, new) or unified diff (path, diff). Use info(edit) first."
 
     @property
     def execution_mode(self) -> ExecutionMode:
@@ -237,7 +238,7 @@ class EditTool(BaseTool):
 
         Mode is auto-detected from arguments:
         - ``diff`` present: unified diff mode
-        - ``old_string`` present: search/replace mode
+        - ``old`` present: search/replace mode
         """
         context = kwargs.get("context")
         path = args.get("path", "")
@@ -246,14 +247,14 @@ class EditTool(BaseTool):
             return ToolResult(
                 error="No path provided. The edit tool supports two modes:\n\n"
                 "1. Unified diff: path + diff\n"
-                "2. Search/replace: path + old_string + new_string\n"
+                "2. Search/replace: path + old + new\n"
             )
 
         # Detect mode from args
         has_diff = bool(args.get("diff"))
-        has_old_string = "old_string" in args
+        has_old = "old" in args
 
-        if has_old_string:
+        if has_old:
             return await self._execute_search_replace(path, args, context)
         if has_diff:
             return await self._execute_unified_diff(path, args, context)
@@ -261,7 +262,7 @@ class EditTool(BaseTool):
         return ToolResult(
             error="Missing edit content. Provide either:\n"
             "- diff: unified diff content, OR\n"
-            "- old_string + new_string: search/replace"
+            "- old + new: search/replace"
         )
 
     def _check_guards(self, file_path: Path, context: Any) -> ToolResult | None:
@@ -293,14 +294,14 @@ class EditTool(BaseTool):
     async def _execute_search_replace(
         self, path: str, args: dict[str, Any], context: Any
     ) -> ToolResult:
-        """Search/replace mode: find old_string in file, replace with new_string."""
-        old_string = args.get("old_string", "")
-        new_string = args.get("new_string", "")
+        """Search/replace mode: find old in file, replace with new."""
+        old = args.get("old", "")
+        new = args.get("new", "")
         replace_all = args.get("replace_all", False)
 
-        if not old_string:
+        if not old:
             return ToolResult(
-                error="old_string is empty. Provide the exact text to find."
+                error="old is empty. Provide the exact text to find."
             )
 
         file_path = Path(path).expanduser().resolve()
@@ -318,29 +319,29 @@ class EditTool(BaseTool):
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 original = await f.read()
 
-            count = original.count(old_string)
+            count = original.count(old)
             if count == 0:
                 return ToolResult(
-                    error="old_string not found in file. "
+                    error="old not found in file. "
                     "Make sure it matches the file content exactly "
                     "(including whitespace and indentation)."
                 )
 
             if count > 1 and not replace_all:
                 return ToolResult(
-                    error=f"Found {count} occurrences of old_string. "
+                    error=f"Found {count} occurrences of old. "
                     "Provide more surrounding context to uniquely identify "
                     "the target, or set replace_all=true to replace all."
                 )
 
             if replace_all:
-                new_content = original.replace(old_string, new_string)
+                new_content = original.replace(old, new)
             else:
-                new_content = original.replace(old_string, new_string, 1)
+                new_content = original.replace(old, new, 1)
 
             if new_content == original:
                 return ToolResult(
-                    output="No changes made (old_string equals new_string)",
+                    output="No changes made (old equals new)",
                     exit_code=0,
                 )
 
@@ -479,13 +480,13 @@ Find an exact string and replace it.
 | Arg | Type | Description |
 |-----|------|-------------|
 | path | string | Path to file (required) |
-| old_string | string | Exact text to find (required) |
-| new_string | string | Replacement text (required) |
+| old | string | Exact text to find (required) |
+| new | string | Replacement text (required) |
 | replace_all | bool | Replace all occurrences (default: false) |
 
 Rules:
-- old_string must match the file content EXACTLY (including whitespace).
-- If old_string appears multiple times and replace_all is false, provide
+- old must match the file content EXACTLY (including whitespace).
+- If old appears multiple times and replace_all is false, provide
   more context to make it unique.
 - Set replace_all=true to replace every occurrence (useful for renaming).
 

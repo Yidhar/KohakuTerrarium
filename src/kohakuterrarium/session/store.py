@@ -259,6 +259,7 @@ class SessionStore:
         turn_count: int | None = None,
         token_usage: dict[str, int] | None = None,
         triggers: list[dict] | None = None,
+        compact_count: int | None = None,
     ) -> None:
         """Save per-agent runtime state."""
         if scratchpad is not None:
@@ -269,6 +270,8 @@ class SessionStore:
             self.state[f"{agent}:token_usage"] = token_usage
         if triggers is not None:
             self.state[f"{agent}:triggers"] = triggers
+        if compact_count is not None:
+            self.state[f"{agent}:compact_count"] = compact_count
 
     def load_scratchpad(self, agent: str) -> dict[str, str]:
         """Load scratchpad for an agent."""

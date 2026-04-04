@@ -222,11 +222,11 @@ Sub-agents are always background jobs. The parent agent loop reports "RUNNING" s
 
 ### Channel Communication
 
-See [Channels](../concept/channels.md) for the full reference.
+See [Channels](../concepts/channels.md) for the full reference.
 
 ### Output Router State Machine
 
-See [Framework Internals](../architecture/framework.md) for the state machine diagram.
+See [Framework Internals](../concepts/agents.md) for the state machine diagram.
 
 ---
 

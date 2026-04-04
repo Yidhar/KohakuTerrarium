@@ -49,10 +49,12 @@ _BUILTIN_SCHEMAS: dict[str, dict] = {
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "File path to edit"},
-            "old": {"type": "string", "description": "Text to find"},
-            "new": {"type": "string", "description": "Replacement text"},
+            "old": {"type": "string", "description": "Exact text to find (search/replace mode)"},
+            "new": {"type": "string", "description": "Replacement text (search/replace mode)"},
+            "replace_all": {"type": "boolean", "description": "Replace all occurrences (default false)"},
+            "diff": {"type": "string", "description": "Unified diff content (diff mode, alternative to old/new)"},
         },
-        "required": ["path", "old", "new"],
+        "required": ["path"],
     },
     "glob": {
         "type": "object",

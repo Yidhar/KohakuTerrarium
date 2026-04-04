@@ -10,13 +10,15 @@ import threading
 import time
 from typing import Any
 
-from rich.markdown import Markdown as RichMarkdown
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Footer, Header, Input, Static, TabbedContent, TabPane
+from textual.widgets import Footer, Header, Markdown, Static, TabbedContent, TabPane
 
 from kohakuterrarium.builtins.tui.widgets import (
+    ChatInput,
+    CompactSummaryBlock,
+    QueuedMessage,
     RunningPanel,
     ScratchpadPanel,
     SessionInfoPanel,
@@ -58,7 +60,7 @@ class AgentTUI(App):
     #chat-scroll { height: 1fr; border: solid $primary-background; padding: 0 1; }
     #chat-tabs { height: 1fr; }
     #quick-status { height: 1; color: $kohaku-amber; padding: 0 1; }
-    #input-box { dock: bottom; height: 3; }
+    #input-box { dock: bottom; }
     #right-status-panel { height: 1fr; overflow-y: auto; padding: 1; }
 
     .chat-tab-scroll { height: 1fr; padding: 0 1; }
@@ -80,9 +82,10 @@ class AgentTUI(App):
         self.agent_name = agent_name
         # Terrarium tabs: ["root", "swe", "reviewer", "#tasks", "#review"]
         self._terrarium_tabs = terrarium_tabs
-        self._input_ready = asyncio.Event()
-        self._input_value: str = ""
+        self._input_queue: asyncio.Queue[str] = asyncio.Queue()
         self._stop_event = asyncio.Event()
+        self._queued_widgets: list[QueuedMessage] = []
+        self._is_processing = False
         self._mounted_event = asyncio.Event()
         self._thinking_active = False
         self._thinking_thread: threading.Thread | None = None
@@ -106,7 +109,7 @@ class AgentTUI(App):
                 else:
                     yield VerticalScroll(id="chat-scroll")
                 yield Static("", id="quick-status")
-                yield Input(placeholder="Type a message...", id="input-box")
+                yield ChatInput(id="input-box")
             with Vertical(id="right-panel"):
                 with VerticalScroll(id="right-status-panel"):
                     yield RunningPanel(id="running-panel")
@@ -121,17 +124,51 @@ class AgentTUI(App):
         self._set_status_text(IDLE_STATUS)
         self._mounted_event.set()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
         text = event.value.strip()
         if not text:
             return
         chat = self._get_active_chat()
         if chat:
-            chat.mount(UserMessage(text))
+            if self._is_processing:
+                # Agent is busy: show as queued (dashed amber border)
+                qw = QueuedMessage(text)
+                self._queued_widgets.append(qw)
+                chat.mount(qw)
+            else:
+                chat.mount(UserMessage(text))
             chat.scroll_end(animate=False)
-        event.input.clear()
-        self._input_value = text
-        self._input_ready.set()
+        self._input_queue.put_nowait(text)
+
+    def on_chat_input_edit_queued(self, event: ChatInput.EditQueued) -> None:
+        """Pull the last queued message back into the input box for editing."""
+        if not self._queued_widgets:
+            return
+        qw = self._queued_widgets.pop()
+        text = qw.message_text
+        # Remove from chat and queue
+        qw.remove()
+        # Drain this message from the asyncio queue
+        try:
+            # Queue is FIFO; the message we want is the last one.
+            # Rebuild queue without the last item.
+            items = []
+            while not self._input_queue.empty():
+                items.append(self._input_queue.get_nowait())
+            if items:
+                items.pop()  # remove the last (most recent queued message)
+            for item in items:
+                self._input_queue.put_nowait(item)
+        except Exception:
+            pass
+        # Put text back in input box
+        try:
+            inp = self.query_one("#input-box", ChatInput)
+            inp.clear()
+            inp.insert(text)
+            inp.focus()
+        except Exception:
+            pass
 
     def _get_active_chat(self) -> VerticalScroll | None:
         """Get the currently visible chat scroll widget."""
@@ -170,9 +207,8 @@ class AgentTUI(App):
             chat.remove_children()
 
     def action_quit(self) -> None:
-        self._input_value = ""
         self._stop_event.set()
-        self._input_ready.set()
+        self._input_queue.put_nowait("")  # empty string signals exit
         self.exit()
 
     # ── Thinking animation ──────────────────────────────────────
@@ -317,6 +353,67 @@ class TUISession:
     ) -> None:
         self._safe_mount(TriggerMessage(label, content), target=target)
 
+    def add_compact_summary(
+        self, round_num: int, summary: str, target: str = ""
+    ) -> None:
+        """Add a compact summary accordion to the chat (shows immediately)."""
+        block = CompactSummaryBlock(summary)
+        self._last_compact_block = block
+        self._safe_mount(block, target=target)
+
+    def update_compact_summary(
+        self, round_num: int, summary: str, target: str = ""
+    ) -> None:
+        """Update the current compact block with final summary (amber -> aquamarine)."""
+        block = getattr(self, "_last_compact_block", None)
+        if block:
+
+            def _do():
+                try:
+                    block.mark_done(summary)
+                except Exception:
+                    pass
+
+            self._safe_call(_do)
+        else:
+            self.add_compact_summary(round_num, summary, target=target)
+
+    def update_token_usage(
+        self,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total: int = 0,
+        cached_tokens: int = 0,
+    ) -> None:
+        """Update session info with per-call token usage (accumulated)."""
+        if not self._app or not self._app.is_running:
+            return
+
+        def _do():
+            try:
+                panel = self._app.query_one("#session-panel", SessionInfoPanel)
+                panel.add_usage(prompt_tokens, completion_tokens, total, cached_tokens)
+            except Exception:
+                pass
+
+        self._safe_call(_do)
+
+    def restore_token_usage(
+        self, total_in: int, total_out: int, last_prompt: int, total_cached: int = 0
+    ) -> None:
+        """Restore cumulative token totals from session history (on resume)."""
+        if not self._app or not self._app.is_running:
+            return
+
+        def _do():
+            try:
+                panel = self._app.query_one("#session-panel", SessionInfoPanel)
+                panel.restore_usage(total_in, total_out, last_prompt, total_cached)
+            except Exception:
+                pass
+
+        self._safe_call(_do)
+
     def add_tool_block(
         self,
         tool_name: str,
@@ -443,12 +540,19 @@ class TUISession:
         widget = self._streaming_widgets.pop(key, None)
         if not widget:
             return
+        scroll_id = self._get_chat_scroll_id(target)
 
         def _do():
             try:
                 text = widget.get_text().strip()
-                if text:
-                    widget.update(RichMarkdown(text))
+                if not text:
+                    return
+                # Mount a Textual Markdown widget (selectable, rendered)
+                # after the StreamingText, then remove the StreamingText
+                md = Markdown(text)
+                chat = self._app.query_one(f"#{scroll_id}", VerticalScroll)
+                chat.mount(md, after=widget)
+                widget.remove()
             except Exception:
                 pass
 
@@ -499,20 +603,46 @@ class TUISession:
         self._safe_call(_do)
 
     def update_session_info(
-        self, session_id: str = "", model: str = "", tokens: int = 0
+        self, session_id: str = "", model: str = "", agent_name: str = ""
     ) -> None:
+        # Buffer for deferred apply (session_info fires before TUI app mounts)
+        self._pending_session_info = (session_id, model, agent_name)
         if not self._app or not self._app.is_running:
             return
 
         def _do():
             try:
                 self._app.query_one("#session-panel", SessionInfoPanel).set_info(
-                    session_id, model, tokens
+                    session_id, model, agent_name
                 )
             except Exception:
                 pass
 
         self._safe_call(_do)
+
+    def set_compact_threshold(self, threshold_tokens: int) -> None:
+        # Buffer for deferred apply
+        self._pending_compact_threshold = threshold_tokens
+        if not self._app or not self._app.is_running:
+            return
+
+        def _do():
+            try:
+                panel = self._app.query_one("#session-panel", SessionInfoPanel)
+                panel.set_compact_threshold(threshold_tokens)
+            except Exception:
+                pass
+
+        self._safe_call(_do)
+
+    def apply_pending_session_info(self) -> None:
+        """Apply buffered session info after TUI app is ready."""
+        info = getattr(self, "_pending_session_info", None)
+        if info:
+            self.update_session_info(*info)
+        threshold = getattr(self, "_pending_compact_threshold", None)
+        if threshold:
+            self.set_compact_threshold(threshold)
 
     def add_tokens(self, count: int) -> None:
         if not self._app or not self._app.is_running:
@@ -549,6 +679,14 @@ class TUISession:
 
     def start_thinking(self) -> None:
         if self._app and self._app.is_running:
+            self._app._is_processing = True
+            # Promote any queued messages to normal (agent will process them)
+            for qw in self._app._queued_widgets:
+                try:
+                    qw.promote()
+                except Exception:
+                    pass
+            self._app._queued_widgets.clear()
             try:
                 self._app.start_thinking_animation()
             except Exception:
@@ -563,6 +701,7 @@ class TUISession:
 
     def set_idle(self) -> None:
         if self._app and self._app.is_running:
+            self._app._is_processing = False
             try:
                 self._app.query_one("#quick-status", Static).update(IDLE_STATUS)
             except Exception:
@@ -575,6 +714,8 @@ class TUISession:
             return False
         try:
             await asyncio.wait_for(self._app._mounted_event.wait(), timeout)
+            # Apply any session info buffered before the app was ready
+            self.apply_pending_session_info()
             return True
         except asyncio.TimeoutError:
             return False
@@ -597,21 +738,18 @@ class TUISession:
         finally:
             self.running = False
             self._stop_event.set()
-            self._app._input_ready.set()
+            self._app._input_queue.put_nowait("")  # unblock get_input
 
     async def get_input(self, prompt: str = "You: ") -> str:
         if not self._app:
             return ""
-        self._app._input_ready.clear()
-        self._app._input_value = ""
-        await self._app._input_ready.wait()
-        return self._app._input_value
+        return await self._app._input_queue.get()
 
     def stop(self) -> None:
         self.running = False
         self._stop_event.set()
         if self._app:
-            self._app._input_ready.set()
+            self._app._input_queue.put_nowait("")  # unblock get_input
             if self._app.is_running:
                 self._app.exit()
 

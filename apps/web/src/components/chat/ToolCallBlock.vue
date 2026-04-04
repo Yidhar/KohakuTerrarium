@@ -69,7 +69,7 @@
               :class="
                 child.status === 'error'
                   ? 'text-coral'
-                  : 'text-sage dark:text-sage-light'
+                  : 'text-iolite dark:text-iolite-light'
               "
             >
               {{ child.status === "error" ? "\u2717" : "\u2713" }}
@@ -173,7 +173,10 @@ const statusIcon = computed(() => {
     return { icon: "\u2717", class: "text-coral" };
   if (props.tc.status === "interrupted")
     return { icon: "\u25cb", class: "text-amber" };
-  return { icon: "\u2713", class: "text-sage" };
+  // Done: type-specific color (tool = iolite, sub-agent = taaffeite)
+  if (props.tc.kind === "subagent")
+    return { icon: "\u2713", class: "text-taaffeite dark:text-taaffeite-light" };
+  return { icon: "\u2713", class: "text-iolite dark:text-iolite-light" };
 });
 
 function formatArgs(args) {

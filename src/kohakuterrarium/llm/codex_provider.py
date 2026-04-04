@@ -7,6 +7,7 @@ ChatGPT Plus/Pro subscription, not API credits.
 """
 
 import asyncio
+import hashlib
 import json as _json
 from typing import Any, AsyncIterator
 
@@ -68,6 +69,7 @@ class CodexOAuthProvider(BaseLLMProvider):
         self._client: Any = None  # openai.OpenAI
         self._last_tool_calls: list[NativeToolCall] = []
         self._last_usage: dict[str, int] = {}
+        self.prompt_cache_key: str | None = None
 
     async def ensure_authenticated(self) -> None:
         """Ensure valid tokens exist. Opens browser/device code if needed."""
@@ -300,14 +302,23 @@ class CodexOAuthProvider(BaseLLMProvider):
         if self.service_tier:
             extra_params["service_tier"] = self.service_tier
 
+        instr_text = instructions or "You are a helpful assistant."
+        # Prompt cache key: routes requests to the same backend server,
+        # dramatically improving cache hit rates. Falls back to system
+        # prompt hash if no session-level key is set.
+        cache_key = self.prompt_cache_key or hashlib.sha256(
+            instr_text.encode()
+        ).hexdigest()[:32]
+
         def _create_stream() -> Any:
             return self._client.responses.create(
                 model=self.model,
-                instructions=instructions or "You are a helpful assistant.",
+                instructions=instr_text,
                 input=api_input,
                 tools=api_tools,
                 store=False,
                 stream=True,
+                prompt_cache_key=cache_key,
                 **extra_params,
             )
 
@@ -357,6 +368,16 @@ class CodexOAuthProvider(BaseLLMProvider):
                                     usage_type=type(u).__name__ if u else "None",
                                 )
                                 if u:
+                                    cached = 0
+                                    # Responses API: input_tokens_details
+                                    details = getattr(
+                                        u, "input_tokens_details", None
+                                    )
+                                    if details:
+                                        cached = (
+                                            getattr(details, "cached_tokens", 0)
+                                            or 0
+                                        )
                                     text_queue.put_nowait(
                                         (
                                             "__usage__",
@@ -370,6 +391,7 @@ class CodexOAuthProvider(BaseLLMProvider):
                                                 "total_tokens": getattr(
                                                     u, "total_tokens", 0
                                                 ),
+                                                "cached_tokens": cached,
                                             },
                                         )
                                     )

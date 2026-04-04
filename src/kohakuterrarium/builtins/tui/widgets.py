@@ -13,8 +13,10 @@ Gemstone color palette:
 import time
 
 from textual.containers import Vertical
+from textual.events import Key
+from textual.message import Message
 
-from textual.widgets import Collapsible, Static
+from textual.widgets import Collapsible, Static, TextArea
 
 
 # ── Tool Call Block ─────────────────────────────────────────────
@@ -52,7 +54,7 @@ class ToolBlock(Collapsible):
         color: #D4920A;
     }
     ToolBlock.-done > CollapsibleTitle {
-        color: #4C9989;
+        color: #5A4FCF;
     }
     ToolBlock.-error > CollapsibleTitle {
         color: #E74C3C;
@@ -155,7 +157,7 @@ class SubAgentBlock(Collapsible):
         color: #A57EAE;
     }
     SubAgentBlock.-done > CollapsibleTitle {
-        color: #4C9989;
+        color: #A57EAE;
     }
     SubAgentBlock.-error > CollapsibleTitle {
         color: #E74C3C;
@@ -172,7 +174,7 @@ class SubAgentBlock(Collapsible):
         color: #0F52BA;
     }
     .sa-tool-line.-done {
-        color: #4C9989;
+        color: #5A4FCF;
     }
     .sa-tool-line.-error {
         color: #E74C3C;
@@ -349,22 +351,85 @@ class UserMessage(Static):
         self.border_title = "You"
 
 
-class TriggerMessage(Static):
+class QueuedMessage(Static):
+    """User message queued while agent is processing. Visually distinct (dashed border)."""
+
+    DEFAULT_CSS = """
+    QueuedMessage {
+        height: auto;
+        margin: 1 0 0 0;
+        padding: 0 1;
+        border: dashed #D4920A 50%;
+        border-title-color: #D4920A;
+        border-title-align: left;
+        color: $text-muted;
+    }
+    """
+
+    def __init__(self, text: str, **kwargs):
+        super().__init__(text, **kwargs)
+        self.border_title = "Queued"
+        self.message_text = text
+
+    def promote(self) -> None:
+        """Convert to a normal UserMessage (when agent picks it up)."""
+        self.border_title = "You"
+        self.remove_class("-queued")
+        self.styles.border = ("round", "#5A4FCF")
+        self.styles.border_title_color = "#5A4FCF"
+        self.styles.color = None
+
+
+class TriggerMessage(Collapsible):
+    """Channel/trigger message as a collapsible accordion.
+
+    Title shows the label (channel + sender), body shows the full content.
+    Amber color scheme to match trigger theme.
+    """
+
     DEFAULT_CSS = """
     TriggerMessage {
         height: auto;
         margin: 1 0 0 0;
+        padding: 0;
+    }
+    TriggerMessage > Contents {
+        height: auto;
+        max-height: 12;
+        overflow-y: auto;
         padding: 0 1;
-        border: round #D4920A;
-        border-title-color: #D4920A;
-        border-title-align: left;
+    }
+    TriggerMessage > CollapsibleTitle {
+        color: #D4920A;
+        background: transparent;
+    }
+    TriggerMessage > CollapsibleTitle:hover {
+        background: #D4920A 15%;
+    }
+    TriggerMessage > CollapsibleTitle:focus {
+        background: #D4920A 15%;
+    }
+    .trigger-body {
+        height: auto;
+        color: $text-muted;
     }
     """
 
+    BUTTON_OPEN = "[-]"
+    BUTTON_CLOSED = "[+]"
+
     def __init__(self, label: str, content: str = "", **kwargs):
-        display = f"{label}\n{content}" if content else label
-        super().__init__(display, **kwargs)
-        self.border_title = "Trigger"
+        preview = content[:80].replace("\n", " ") if content else ""
+        title = f"\u25cf {label}"
+        if preview:
+            title += f"  {preview}"
+        self._body = Static(content, classes="trigger-body")
+        super().__init__(
+            self._body,
+            title=title,
+            collapsed=bool(content),
+            **kwargs,
+        )
 
 
 class StreamingText(Static):
@@ -480,37 +545,146 @@ class SessionInfoPanel(Static):
         super().__init__("", **kwargs)
         self.border_title = "Session"
         self._start_time = time.monotonic()
-        self._tokens = 0
+        self._input_tokens = 0
+        self._output_tokens = 0
+        self._cached_tokens = 0
+        self._last_prompt_tokens = 0
+        self._compact_threshold = 0
         self._model = ""
         self._session_id = ""
+        self._agent_name = ""
 
-    def set_info(self, session_id: str = "", model: str = "", tokens: int = 0) -> None:
+    def set_info(
+        self, session_id: str = "", model: str = "", agent_name: str = ""
+    ) -> None:
         self._session_id = session_id
         self._model = model
-        self._tokens = tokens
+        self._agent_name = agent_name
+        self._refresh()
+
+    def add_usage(
+        self,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total: int = 0,
+        cached_tokens: int = 0,
+    ) -> None:
+        self._input_tokens += prompt_tokens
+        self._output_tokens += completion_tokens
+        self._cached_tokens += cached_tokens
+        self._last_prompt_tokens = prompt_tokens
+        self._refresh()
+
+    def restore_usage(
+        self, total_in: int, total_out: int, last_prompt: int, total_cached: int = 0
+    ) -> None:
+        """Set cumulative totals from session history (on resume)."""
+        self._input_tokens = total_in
+        self._output_tokens = total_out
+        self._cached_tokens = total_cached
+        self._last_prompt_tokens = last_prompt
         self._refresh()
 
     def add_tokens(self, count: int) -> None:
-        self._tokens += count
+        """Backward compat: treat as total input tokens."""
+        self._input_tokens += count
+        self._refresh()
+
+    def set_compact_threshold(self, threshold_tokens: int) -> None:
+        self._compact_threshold = threshold_tokens
         self._refresh()
 
     def _refresh(self) -> None:
         elapsed = time.monotonic() - self._start_time
         mins, secs = int(elapsed // 60), int(elapsed % 60)
         lines = []
+        if self._agent_name:
+            lines.append(f"Agent: {self._agent_name}")
         if self._session_id:
             lines.append(f"ID: {self._session_id[:20]}")
         if self._model:
             lines.append(f"Model: {self._model}")
         lines.append(f"Runtime: {mins}m {secs}s")
-        if self._tokens >= 1000:
-            lines.append(f"Tokens: {self._tokens / 1000:.1f}k")
-        elif self._tokens > 0:
-            lines.append(f"Tokens: {self._tokens}")
+        total = self._input_tokens + self._output_tokens
+        if total > 0:
+            in_part = f"In: {_fmt_tokens(self._input_tokens)}"
+            if self._cached_tokens > 0:
+                in_part += f" (cache {_fmt_tokens(self._cached_tokens)})"
+            lines.append(f"{in_part}  Out: {_fmt_tokens(self._output_tokens)}")
+        if self._compact_threshold > 0:
+            if self._last_prompt_tokens > 0:
+                pct = int(self._last_prompt_tokens / self._compact_threshold * 100)
+                lines.append(
+                    f"Context: {_fmt_tokens(self._last_prompt_tokens)}"
+                    f"/{_fmt_tokens(self._compact_threshold)} ({pct}%)"
+                )
+            else:
+                lines.append(
+                    f"Compact: {_fmt_tokens(self._compact_threshold)}"
+                )
         self.update("\n".join(lines))
 
 
 # ── Helpers ─────────────────────────────────────────────────────
+
+
+class CompactSummaryBlock(Collapsible):
+    """Compact summary displayed as a collapsible accordion.
+
+    Amber while compacting, aquamarine when done.
+    """
+
+    DEFAULT_CSS = """
+    CompactSummaryBlock {
+        height: auto;
+        margin: 1 0;
+        padding: 0;
+    }
+    CompactSummaryBlock > Contents {
+        height: auto;
+        max-height: 12;
+        overflow-y: auto;
+        padding: 0 1;
+    }
+    CompactSummaryBlock > CollapsibleTitle {
+        background: transparent;
+    }
+    CompactSummaryBlock > CollapsibleTitle:hover {
+        background: #0F52BA 15%;
+    }
+    CompactSummaryBlock > CollapsibleTitle:focus {
+        background: #0F52BA 15%;
+    }
+    CompactSummaryBlock.-running > CollapsibleTitle {
+        color: #D4920A;
+    }
+    CompactSummaryBlock.-done > CollapsibleTitle {
+        color: #0F52BA;
+    }
+    .compact-body {
+        height: auto;
+        color: $text-muted;
+    }
+    """
+
+    BUTTON_OPEN = "[-]"
+    BUTTON_CLOSED = "[+]"
+
+    def __init__(self, summary: str, done: bool = False, **kwargs):
+        self._body = Static(summary, classes="compact-body")
+        if done:
+            title = "\u25cf Context auto-compact"
+        else:
+            title = "\u25cb Context auto-compact"
+        super().__init__(self._body, title=title, collapsed=True, **kwargs)
+        self.add_class("-done" if done else "-running")
+
+    def mark_done(self, summary: str) -> None:
+        """Transition from running (amber) to done (sapphire)."""
+        self._body.update(summary)
+        self.title = "\u25cf Context auto-compact"
+        self.remove_class("-running")
+        self.add_class("-done")
 
 
 class TerrariumPanel(Static):
@@ -566,7 +740,75 @@ class TerrariumPanel(Static):
         self.update("\n".join(lines) if lines else "(no topology)")
 
 
+# ── Chat Input ─────────────────────────────────────────────────
+
+
+class ChatInput(TextArea):
+    """Multi-line input. Enter sends, Shift+Enter or Ctrl+J inserts newline.
+
+    Ctrl+J works universally (including SSH) since it is the literal
+    newline character and does not depend on terminal modifier support.
+    """
+
+    DEFAULT_CSS = """
+    ChatInput {
+        height: auto;
+        min-height: 3;
+        max-height: 8;
+        border: solid #5A4FCF 30%;
+    }
+    ChatInput:focus {
+        border: solid #5A4FCF;
+    }
+    """
+
+    class Submitted(Message):
+        """Posted when the user presses Enter to send."""
+
+        def __init__(self, value: str) -> None:
+            super().__init__()
+            self.value = value
+
+    class EditQueued(Message):
+        """Posted when user presses Up on empty input to edit last queued message."""
+
+        pass
+
+    def _on_key(self, event: Key) -> None:
+        # Shift+Enter, Ctrl+Enter, Ctrl+J: insert newline
+        if event.key in ("shift+enter", "ctrl+enter", "ctrl+j"):
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")
+            return
+        # Plain Enter: send message
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            text = self.text.strip()
+            if text:
+                self.post_message(self.Submitted(text))
+                self.clear()
+            return
+        # Up arrow on empty input: edit last queued message
+        if event.key == "up" and not self.text.strip():
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.EditQueued())
+            return
+        super()._on_key(event)
+
+
 # ── Helpers ─────────────────────────────────────────────────────
+
+
+def _fmt_tokens(n: int) -> str:
+    """Format token count as human-readable string."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
 
 
 def _summarize_output(output: str) -> str:

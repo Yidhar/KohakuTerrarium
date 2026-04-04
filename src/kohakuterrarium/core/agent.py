@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from kohakuterrarium.core.agent_handlers import AgentHandlersMixin
 from kohakuterrarium.core.agent_init import AgentInitMixin
+from kohakuterrarium.core.compact import CompactConfig, CompactManager
 from kohakuterrarium.core.config import AgentConfig, load_agent_config
 from kohakuterrarium.core.events import TriggerEvent, create_user_input_event
 from kohakuterrarium.core.loader import ModuleLoader
@@ -130,8 +131,12 @@ class Agent(AgentInitMixin, AgentHandlersMixin):
         self._session_output: Any = None
         self._pending_resume_events: list[dict] | None = None
 
-        # Interrupt flag: set to True to cancel current processing
+        # Interrupt: flag + task reference for immediate cancellation
         self._interrupt_requested = False
+        self._processing_task: asyncio.Task | None = None
+
+        # Auto-compact (initialized after controller is ready)
+        self.compact_manager: Any = None
 
         # Environment and session (explicit or auto-created in _init_executor)
         self.environment: Environment | None = environment
@@ -201,6 +206,11 @@ class Agent(AgentInitMixin, AgentHandlersMixin):
         await self.input.start()
         await self.output_router.start()
 
+        # Wire Escape key to agent.interrupt() for TUI mode
+        tui_input = getattr(self.input, "_tui", None)
+        if tui_input and tui_input._app:
+            tui_input._app.on_interrupt = self.interrupt
+
         # Wire trigger fired notification to output
         def _on_trigger_fired(trigger_id, event):
             ctx = event.context or {}
@@ -242,20 +252,82 @@ class Agent(AgentInitMixin, AgentHandlersMixin):
         self._running = True
         self._shutdown_event.clear()
 
+        # Initialize auto-compact manager
+        compact_data = self.config.compact or {}
+        compact_cfg = CompactConfig(
+            max_tokens=compact_data.get("max_tokens", CompactConfig.max_tokens),
+            threshold=compact_data.get("threshold", CompactConfig.threshold),
+            target=compact_data.get("target", CompactConfig.target),
+            keep_recent_turns=compact_data.get(
+                "keep_recent_turns", CompactConfig.keep_recent_turns
+            ),
+        )
+        self.compact_manager = CompactManager(compact_cfg)
+        self.compact_manager._controller = self.controller
+        self.compact_manager._llm = self.llm
+        self.compact_manager._output_router = self.output_router
+        self.compact_manager._agent_name = self.config.name
+        if self.session_store:
+            self.compact_manager._session_store = self.session_store
+            # Restore compact_count from session so round numbering continues
+            try:
+                saved_count = self.session_store.state.get(
+                    f"{self.config.name}:compact_count"
+                )
+                if saved_count is not None:
+                    self.compact_manager._compact_count = int(saved_count)
+                    logger.info(
+                        "Compact count restored",
+                        compact_count=self.compact_manager._compact_count,
+                    )
+            except (KeyError, TypeError, ValueError):
+                pass
+
+        # Push session info to output (for TUI session panel)
+        session_id = ""
+        if self.session_store:
+            try:
+                meta = self.session_store.load_meta()
+                session_id = meta.get("session_id", "")
+            except Exception:
+                pass
+
+        # Set prompt_cache_key on LLM provider for cache routing
+        if session_id and hasattr(self.llm, "prompt_cache_key"):
+            self.llm.prompt_cache_key = session_id
+            logger.info("Prompt cache key set", cache_key=session_id[:16])
+
+        model = getattr(self.config, "model", "") or ""
+        self.output_router.notify_activity(
+            "session_info",
+            "",
+            metadata={
+                "session_id": session_id,
+                "model": model,
+                "agent_name": self.config.name,
+                "compact_threshold": compact_cfg.max_tokens,
+            },
+        )
+
         if self._termination_checker:
             self._termination_checker.start()
 
     def interrupt(self) -> None:
-        """Interrupt the current processing cycle.
+        """Interrupt the current processing cycle immediately.
 
-        Cancels the LLM stream and running direct tools.
-        The agent stays alive and ready for the next input.
-        Background tools continue running.
+        Cancels the processing task directly, which propagates
+        CancelledError through whatever is awaiting (LLM stream,
+        tool gather, etc.). The agent stays alive for the next input.
         """
         self._interrupt_requested = True
-        # Signal the controller to stop streaming
         self.controller._interrupted = True
-        # Cancel running direct tool tasks
+
+        # Cancel the processing task (immediate, not flag-based)
+        processing = getattr(self, "_processing_task", None)
+        if processing and not processing.done():
+            processing.cancel()
+
+        # Also cancel running direct tool tasks
         for job_id, task in list(self.executor._tasks.items()):
             status = self.executor.get_status(job_id)
             if status and status.state.value == "running" and not task.done():
@@ -341,8 +413,19 @@ class Agent(AgentInitMixin, AgentHandlersMixin):
 
         except KeyboardInterrupt:
             logger.info("Interrupted")
+        except asyncio.CancelledError:
+            logger.info("Agent cancelled")
         except Exception as e:
-            logger.error("Agent error", error=str(e))
+            logger.error("Fatal agent error", error=str(e))
+            # Try to show error in output before stopping
+            try:
+                error_type = type(e).__name__
+                await self.output_router.write(
+                    f"\n[Fatal Error] {error_type}: {e}\n"
+                )
+                await self.output_router.on_processing_end()
+            except Exception:
+                pass
             raise
         finally:
             await self.stop()
@@ -414,6 +497,10 @@ class Agent(AgentInitMixin, AgentHandlersMixin):
         # Wire session store to trigger manager for resumable trigger persistence
         self.trigger_manager._session_store = store
         self.trigger_manager._agent_name = self.config.name
+
+        # Wire session store to compact manager
+        if self.compact_manager:
+            self.compact_manager._session_store = store
 
         logger.debug("Session store attached", agent=self.config.name)
 

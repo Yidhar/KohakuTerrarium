@@ -150,7 +150,7 @@ kt run examples/agent-apps/my_agent
 
 ## Understanding Tool Calls
 
-When the agent needs to use a tool, it outputs a special format. See [Tool Formats](../concept/tool-formats.md) for all supported formats. The default bracket format:
+When the agent needs to use a tool, it outputs a special format. See [Tool Formats](../concepts/tool-formats.md) for all supported formats. The default bracket format:
 
 ```
 [/tool_name]
@@ -340,58 +340,10 @@ async def main():
 asyncio.run(main())
 ```
 
-## Running a Terrarium
-
-To run a multi-agent terrarium:
-
-```bash
-# Run with a root agent (user talks to root, root orchestrates the team)
-kt terrarium run terrariums/swe_team/
-
-# Run with session recording
-kt terrarium run terrariums/swe_team/ --session
-
-# Run with channel observation (specific channels)
-kt terrarium run examples/terrariums/novel_terrarium/ --observe ideas outline
-```
-
-See [Terrarium](../concept/terrarium.md) for the concepts and [Configuration Reference](configuration.md) for the terrarium YAML format.
-
-## Session Persistence and Resume
-
-Every session can be saved to a `.kohakutr` file (SQLite via KohakuVault) and resumed later.
-
-```bash
-# Start with session recording
-kt run examples/agent-apps/swe_agent --session
-
-# Resume right where you left off
-kt resume .kohaku/sessions/swe_agent_*.kohakutr
-
-# Inspect a session
-python scripts/inspect_session.py session.kohakutr --all
-python scripts/inspect_session.py session.kohakutr --search "auth bug"
-```
-
-What gets saved: conversation history (with full tool_calls metadata), event log, scratchpad state, token usage, sub-agent conversations, channel messages.
-
-## Web Dashboard
-
-A Vue 3 web frontend for managing agents and terrariums in real-time.
-
-```bash
-# Start API server
-cd KohakuTerrarium && python -m apps.api.main
-
-# Start frontend dev server
-cd apps/web && npm install && npm run dev
-```
-
-Features: terrarium topology graph, multi-tab chat (root + creatures + channels), real-time streaming, sub-agent tool activity, channel message feed, token usage tracking, dark/light mode with gemstone color theme.
-
 ## Next Steps
 
-1. Explore the [Example Agents](example-agents.md) for more patterns
-2. Read the [Configuration Reference](configuration.md) for all options
-3. Check the [Architecture Overview](../architecture/README.md) to understand the system
-4. See the [Python API Reference](../api-reference/python.md) for detailed APIs
+- [Terrariums](terrariums.md): build multi-agent systems with channels and creature wiring
+- [Sessions](sessions.md): persist conversations, resume where you left off, web dashboard
+- [Creatures](creatures.md): pre-built agent personalities with tools, sub-agents, and inheritance
+- [Examples](examples.md): full walkthrough of included example agents and patterns
+- [Configuration Reference](configuration.md): all agent config fields and options

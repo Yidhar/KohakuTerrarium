@@ -13,6 +13,8 @@ from typing import Any
 
 import yaml
 
+from kohakuterrarium.packages import resolve_package_path
+
 try:
     import tomllib
 except ImportError:
@@ -152,7 +154,6 @@ class AgentConfig:
 
     # Context management - limits LLM conversation history
     max_messages: int = 0  # Max messages to keep (0 = unlimited)
-    max_context_chars: int = 0  # Max chars (0 = unlimited)
     ephemeral: bool = (
         False  # Clear conversation after each interaction (for group chat)
     )
@@ -163,6 +164,9 @@ class AgentConfig:
     tools: list[ToolConfigItem] = field(default_factory=list)
     subagents: list[SubAgentConfigItem] = field(default_factory=list)
     output: OutputConfig = field(default_factory=OutputConfig)
+
+    # Auto-compact config (dict with max_tokens, threshold, target, keep_recent_turns)
+    compact: dict[str, Any] | None = None
 
     # Startup trigger (fires once when agent starts)
     startup_trigger: dict[str, Any] | None = None
@@ -262,8 +266,6 @@ def _resolve_base_config_path(base_config: str, child_dir: Path) -> Path | None:
     # Strip quotes first (YAML may quote the @ as "@...")
     clean = base_config.strip('"').strip("'")
     if clean.startswith("@"):
-        from kohakuterrarium.packages import resolve_package_path
-
         try:
             return resolve_package_path(clean)
         except (FileNotFoundError, ValueError) as e:
@@ -596,7 +598,6 @@ def _construct_agent_config(
             "include_hints_in_prompt", config_data.get("include_hints_in_prompt", True)
         ),
         max_messages=controller_data.get("max_messages", 0),
-        max_context_chars=controller_data.get("max_context_chars", 0),
         ephemeral=controller_data.get("ephemeral", False),
         tool_format=controller_data.get("tool_format", "bracket"),
         input=_parse_input_config(config_data.get("input")),
@@ -604,6 +605,7 @@ def _construct_agent_config(
         tools=[_parse_tool_config(t) for t in config_data.get("tools", [])],
         subagents=[_parse_subagent_config(s) for s in config_data.get("subagents", [])],
         output=_parse_output_config(config_data.get("output")),
+        compact=config_data.get("compact"),
         startup_trigger=config_data.get("startup_trigger"),
         termination=config_data.get("termination"),
         max_subagent_depth=config_data.get("max_subagent_depth", 3),
