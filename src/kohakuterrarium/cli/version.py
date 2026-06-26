@@ -133,6 +133,9 @@ def format_version_report(verbose: bool = False) -> str:
         f"  python:       {platform.python_version()}",
         f"  executable:   {sys.executable}",
         f"  git commit:   {git['summary']}",
+        # Capability advert (switchyard-headless fork): external drivers
+        # grep this line to detect first-class headless JSONL support.
+        "  headless:     kt run --headless --json  (switchyard-headless fork)",
     ]
 
     if git.get("available") and git.get("branch"):

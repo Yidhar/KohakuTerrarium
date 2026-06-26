@@ -145,6 +145,59 @@ def _build_parser() -> argparse.ArgumentParser:
             "--channel reviews``."
         ),
     )
+    # Headless one-shot mode (switchyard-headless fork). Builds a
+    # standalone Agent (io="headless"), drives exactly ONE turn from a
+    # supplied prompt, streams typed events, and exits with a status
+    # code. Designed to be driven as a subprocess by external tools.
+    run_parser.add_argument(
+        "--headless",
+        action="store_true",
+        help=(
+            "Run a single non-interactive turn from --prompt/--input-file/"
+            "stdin and exit (exit 0 on success, non-zero otherwise)."
+        ),
+    )
+    run_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help=(
+            "With --headless, emit machine-readable JSONL on stdout: one "
+            "JSON object per line (turn_start, text, activity, turn_end)."
+        ),
+    )
+    run_parser.add_argument(
+        "-p",
+        "--prompt",
+        default=None,
+        help="Headless prompt text (alternative to --input-file / stdin).",
+    )
+    run_parser.add_argument(
+        "--input-file",
+        default=None,
+        dest="input_file",
+        help="Read the headless prompt from a file ('-' = stdin).",
+    )
+    run_parser.add_argument(
+        "--cwd",
+        default=None,
+        help="Working directory for the headless run (Agent pwd / sandbox root).",
+    )
+    run_parser.add_argument(
+        "--sandbox",
+        default=None,
+        metavar="PRESET",
+        help=(
+            "Headless sandbox preset: PURE|READ_ONLY|WORKSPACE|NETWORK|SHELL "
+            "or off (default: off — no sandbox plugin)."
+        ),
+    )
+    run_parser.add_argument(
+        "--no-subagents",
+        action="store_true",
+        dest="no_subagents",
+        help="Headless leaf mode: strip the creature's sub-agents.",
+    )
 
     # cli / tui — subcommand aliases for the standalone ``kt-cli`` /
     # ``kt-tui`` front doors. Optional creature argument; omit it to pick
@@ -496,6 +549,28 @@ def _dispatch_run(args: argparse.Namespace) -> int:
     chokepoint (``load_agent_config`` / ``load_terrarium_config``)
     resolves package references for every entry point.
     """
+    if getattr(args, "headless", False):
+        from kohakuterrarium.cli.run import run_headless_cli
+
+        # ``--session`` defaults to ``__auto__``; in headless we only
+        # bind a store when the caller passes an explicit path (and not
+        # ``--no-session``), so a one-shot run leaves no stray sessions.
+        sess = None if args.no_session else args.session
+        if sess == "__auto__":
+            sess = None
+        return run_headless_cli(
+            args.agent_path,
+            prompt=args.prompt,
+            input_file=args.input_file,
+            llm=args.llm,
+            cwd=args.cwd,
+            session=sess,
+            no_subagents=args.no_subagents,
+            sandbox=args.sandbox,
+            as_json=args.as_json,
+            log_level=args.log_level,
+        )
+
     agent_path = args.agent_path
     session = None if args.no_session else args.session
     extra_creatures = list(getattr(args, "add_creatures", None) or [])
