@@ -352,5 +352,11 @@
     "line": 87,
     "function": "_try_tk",
     "reason": "tkinter.ttk sibling — same fallback rationale"
+  },
+  {
+    "file": "src/kohakuterrarium/cli/__init__.py",
+    "function": "_dispatch_run",
+    "target": "kohakuterrarium.cli.run_headless",
+    "reason": "Lazy import of the headless entry point: importing cli.run_headless pulls in the heavy core.agent build chain (Agent + plugins + LLM bootstrap), which is only needed when the user actually dispatches `kt run --headless`. Keyed by target (not line) so it survives edits to _dispatch_run."
   }
 ]

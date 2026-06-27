@@ -550,7 +550,9 @@ def _dispatch_run(args: argparse.Namespace) -> int:
     resolves package references for every entry point.
     """
     if getattr(args, "headless", False):
-        from kohakuterrarium.cli.run import run_headless_cli
+        # Lazy import: pulling in cli.run_headless triggers the heavy
+        # core.agent import chain, which is only needed on the headless path.
+        from kohakuterrarium.cli.run_headless import run_headless_cli
 
         # ``--session`` defaults to ``__auto__``; in headless we only
         # bind a store when the caller passes an explicit path (and not

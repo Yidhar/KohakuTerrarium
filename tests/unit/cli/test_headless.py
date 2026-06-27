@@ -51,7 +51,7 @@ def _patch_offline(monkeypatch, tmp_path, script):
 
 
 def _run(tmp_path, *, as_json, prompt="ping", no_subagents=True):
-    from kohakuterrarium.cli.run import _run_headless
+    from kohakuterrarium.cli.run_headless import _run_headless
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
