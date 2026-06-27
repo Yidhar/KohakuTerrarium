@@ -99,6 +99,12 @@ def load_skill_from_path(
         paths = _as_string_list(frontmatter.get("paths"))
         allowed_tools = _as_string_list(frontmatter.get("allowed-tools"))
 
+        # Folder-form skills (``<name>/SKILL.md``) own a private directory
+        # whose siblings are bundled resources; flat-form skills
+        # (``<name>.md``) share a root with other skills, so they have no
+        # private bundle. The entrypoint filename is the reliable signal.
+        bundle_dir = skill_md.parent if skill_md.name == "SKILL.md" else None
+
         return Skill(
             name=name,
             description=description,
@@ -109,6 +115,7 @@ def load_skill_from_path(
             disable_model_invocation=disable_model,
             paths=paths,
             allowed_tools=allowed_tools,
+            bundle_dir=bundle_dir,
         )
     except Exception as exc:  # noqa: BLE001 — defensive: never crash the loader
         logger.warning(

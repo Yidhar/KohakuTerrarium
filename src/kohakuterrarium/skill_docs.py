@@ -347,3 +347,135 @@ def load_skill_docs_from_dir(directory: Path | str) -> dict[str, SkillDoc]:
             docs[doc.name] = doc
 
     return docs
+
+
+# ---------------------------------------------------------------------------
+# Bundled-resource manifest (progressive disclosure for skill bundles)
+#
+# A folder-form skill (``<name>/SKILL.md``) may ship sibling files —
+# templates, references, scripts — that ``SKILL.md`` points at with a
+# relative path such as ``template/science_fiction.md``. The framework
+# renders only the SKILL.md body, so without surfacing the skill's own
+# directory plus a file listing the model has no anchor to resolve those
+# references against. These helpers build that anchor: the absolute
+# bundle directory + a bounded manifest of sibling files, which callers
+# splice into the skill invocation / ``info`` output so the model can
+# pull resources on demand with the ``read`` tool.
+# ---------------------------------------------------------------------------
+
+DEFAULT_MANIFEST_MAX_FILES = 200
+
+# Directories never worth listing in a bundle manifest — VCS metadata,
+# build artefacts, virtualenvs, caches. Mirrors the skip set used by the
+# ``paths:`` scanner so the two stay consistent.
+_MANIFEST_SKIP_DIRS: frozenset[str] = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        "dist",
+        "build",
+    }
+)
+
+
+def build_skill_manifest(
+    bundle_dir: Path | str | None,
+    *,
+    max_files: int = DEFAULT_MANIFEST_MAX_FILES,
+) -> list[str]:
+    """List bundled sibling files under a skill's own folder.
+
+    Returns sorted, bundle-relative POSIX paths for every regular file
+    under ``bundle_dir`` except the top-level ``SKILL.md`` entrypoint
+    (already rendered as the skill body). Hidden entries and common heavy
+    directories (``.git``, ``node_modules``, ``__pycache__`` …) are
+    skipped, and the scan is bounded to ``max_files`` so a pathological
+    bundle cannot blow up the context window.
+
+    Returns ``[]`` when ``bundle_dir`` is ``None``, missing, or not a
+    directory — i.e. for flat-form skills that share a root folder and
+    therefore own no private resource directory.
+    """
+    if bundle_dir is None:
+        return []
+    root = Path(bundle_dir)
+    try:
+        if not root.is_dir():
+            return []
+    except OSError:
+        return []
+
+    out: list[str] = []
+    # Breadth-first, bounded; deterministic ordering by name within a dir.
+    queue: list[Path] = [root]
+    while queue and len(out) < max_files:
+        current = queue.pop(0)
+        try:
+            entries = sorted(current.iterdir(), key=lambda p: p.name)
+        except OSError:
+            continue
+        for entry in entries:
+            if len(out) >= max_files:
+                break
+            name = entry.name
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                continue
+            if is_dir:
+                if name.startswith(".") or name in _MANIFEST_SKIP_DIRS:
+                    continue
+                queue.append(entry)
+                continue
+            # Regular file. Skip only the top-level SKILL.md entrypoint —
+            # a nested ``references/SKILL.md`` is a legitimate resource.
+            if name == "SKILL.md" and current == root:
+                continue
+            try:
+                rel = entry.relative_to(root).as_posix()
+            except ValueError:
+                rel = name
+            out.append(rel)
+    out.sort()
+    return out
+
+
+def render_skill_resources(
+    bundle_dir: Path | str | None,
+    *,
+    max_files: int = DEFAULT_MANIFEST_MAX_FILES,
+) -> str:
+    """Render the progressive-disclosure "Skill resources" block.
+
+    Surfaces the skill's absolute directory plus a manifest of sibling
+    files so the model can pull referenced resources (templates,
+    references, scripts) on demand with the ``read`` tool. Returns ``""``
+    when the skill has no bundled files (flat-form skills, or a folder
+    that only contains ``SKILL.md``) so callers can append unconditionally.
+    """
+    if bundle_dir is None:
+        return ""
+    files = build_skill_manifest(bundle_dir, max_files=max_files)
+    if not files:
+        return ""
+    abs_dir = Path(bundle_dir).resolve()
+    lines = [
+        "## Skill resources",
+        f"Skill directory: {abs_dir}",
+        "",
+        (
+            "This skill bundles the files below. Read any you need on demand "
+            "with the `read` tool — resolve every relative path referenced in "
+            "the skill against the skill directory above."
+        ),
+        "",
+        "Bundled files:",
+    ]
+    lines.extend(f"- {rel}" for rel in files)
+    return "\n".join(lines)

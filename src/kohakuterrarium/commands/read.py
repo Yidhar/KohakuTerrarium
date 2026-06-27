@@ -18,7 +18,7 @@ from kohakuterrarium.builtin_skills import (
 )
 from kohakuterrarium.commands.base import BaseCommand, CommandResult, parse_command_args
 from kohakuterrarium.core.tool_output import render_content_text
-from kohakuterrarium.skill_docs import SkillDoc, load_skill_doc
+from kohakuterrarium.skill_docs import SkillDoc, load_skill_doc, render_skill_resources
 
 
 class ReadCommand(BaseCommand):
@@ -260,6 +260,13 @@ def _render_skill_info(context: Any, name: str) -> str | None:
     parts.append("")  # blank line
     if skill.body:
         parts.append(skill.body)
+    # Progressive disclosure: list bundled resources so the model can pull
+    # referenced files with the ``read`` tool. ``info`` is read-only and does
+    # not activate the skill — only the ``skill`` tool does that.
+    resources = render_skill_resources(skill.bundle_dir)
+    if resources:
+        parts.append("")
+        parts.append(resources)
     return "\n".join(parts)
 
 

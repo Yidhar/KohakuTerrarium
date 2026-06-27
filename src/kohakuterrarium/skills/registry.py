@@ -26,6 +26,14 @@ logger = get_logger(__name__)
 
 
 SCRATCHPAD_ENABLED_KEY = "skills.enabled"
+SCRATCHPAD_ACTIVE_KEY = "skills.active"
+
+# Tools always permitted even while a skill's ``allowed-tools`` whitelist is
+# active, so a restricted skill can never brick progressive disclosure
+# (``read`` pulls bundled resources), skill switching (``skill`` / ``info``),
+# or finishing the turn (``stop_task``). Shared by the skill renderer and the
+# allowed-tools gate plugin so the advertised and enforced sets never drift.
+IMPLICIT_SKILL_ALLOWED_TOOLS: tuple[str, ...] = ("read", "skill", "info", "stop_task")
 
 
 @dataclass
@@ -37,6 +45,14 @@ class Skill:
     points at the folder containing ``SKILL.md`` so the model can
     reference sibling ``scripts/`` / ``references/`` / ``assets/`` via
     bash without framework magic.
+
+    ``bundle_dir`` is the skill's *private* resource folder — set only
+    for folder-form skills (``<name>/SKILL.md``), where ``base_dir`` is
+    the skill's own directory. It is ``None`` for flat-form skills
+    (``<name>.md``) whose ``base_dir`` is a *shared* root holding many
+    skills, so listing its siblings would leak unrelated files. Progressive
+    disclosure of bundled resources keys off ``bundle_dir``, not
+    ``base_dir``.
     """
 
     name: str
@@ -49,6 +65,7 @@ class Skill:
     enabled: bool = True
     paths: list[str] = field(default_factory=list)
     allowed_tools: list[str] = field(default_factory=list)
+    bundle_dir: Path | None = None
 
     @property
     def invocation_blocked(self) -> bool:
@@ -69,6 +86,12 @@ class SkillRegistry:
         self._skills: dict[str, Skill] = {}
         self._scratchpad = scratchpad
         self._restored: set[str] = set()
+        # Name of the skill currently being followed (set when the model
+        # invokes a skill via the ``skill`` tool). Drives the allowed-tools
+        # gate. Restored from the scratchpad so a mid-task resume keeps any
+        # tool restriction in force.
+        self._active: str | None = None
+        self._restore_active()
 
     # ------------------------------------------------------------------
     # Population
@@ -144,6 +167,47 @@ class SkillRegistry:
         # Replay persisted overrides onto anything already registered.
         for skill in self._skills.values():
             self._apply_persisted_state(skill)
+        self._restore_active()
+
+    # ------------------------------------------------------------------
+    # Active skill (Qd: drives the allowed-tools gate)
+    # ------------------------------------------------------------------
+
+    def set_active(self, name: str) -> bool:
+        """Mark ``name`` as the skill currently being followed.
+
+        Returns ``True`` when the skill exists and is now active. Unknown
+        names are ignored (returns ``False``) so a stale invocation cannot
+        pin a phantom active skill. "Last invoked wins": a later
+        :meth:`set_active` replaces the previous one, which naturally lifts
+        a prior skill's restriction when a skill without ``allowed-tools``
+        is invoked next.
+        """
+        if name not in self._skills:
+            return False
+        self._active = name
+        self._persist_active()
+        return True
+
+    def clear_active(self) -> None:
+        """Clear the active skill, lifting any allowed-tools restriction."""
+        self._active = None
+        self._persist_active()
+
+    @property
+    def active_skill(self) -> Skill | None:
+        """The enabled skill currently being followed, or ``None``.
+
+        Returns ``None`` when nothing is active, the active name no longer
+        resolves, or the active skill has since been disabled — disabling
+        a skill is therefore a valid way to lift its tool restriction.
+        """
+        if self._active is None:
+            return None
+        skill = self._skills.get(self._active)
+        if skill is None or not skill.enabled:
+            return None
+        return skill
 
     # ------------------------------------------------------------------
     # Persistence helpers
@@ -174,3 +238,17 @@ class SkillRegistry:
             return
         payload = {name: s.enabled for name, s in self._skills.items()}
         self._scratchpad.set(SCRATCHPAD_ENABLED_KEY, json.dumps(payload))
+
+    def _restore_active(self) -> None:
+        """Restore the active-skill name from the scratchpad, if any."""
+        if self._scratchpad is None:
+            return
+        raw = self._scratchpad.get(SCRATCHPAD_ACTIVE_KEY)
+        if isinstance(raw, str) and raw.strip():
+            self._active = raw.strip()
+
+    def _persist_active(self) -> None:
+        """Mirror the active-skill name into the scratchpad (``""`` = none)."""
+        if self._scratchpad is None:
+            return
+        self._scratchpad.set(SCRATCHPAD_ACTIVE_KEY, self._active or "")

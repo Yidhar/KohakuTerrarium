@@ -628,6 +628,23 @@ class AgentInitMixin:
         if session is not None:
             session.extra["skills_registry"] = self.skills
 
+        # Turn on the allowed-tools gate the moment a skill actually declares
+        # one, so the restriction is enforced out of the box without adding any
+        # behaviour for agents that never use allowed-tools. The gate plugin is
+        # registered (disabled) by catalog discovery in ``_init_plugins``, which
+        # runs before ``_init_skills``. Best-effort: a failure here still leaves
+        # progressive disclosure working; only enforcement is skipped.
+        plugins = getattr(self, "plugins", None)
+        if plugins is not None and any(s.allowed_tools for s in self.skills.all()):
+            try:
+                plugins.enable("skill_tool_gate")
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.warning(
+                    "Failed to enable skill_tool_gate plugin",
+                    error=str(exc),
+                    exc_info=True,
+                )
+
         logger.info(
             "Skills registry initialized",
             skill_count=len(self.skills),

@@ -23,6 +23,10 @@ _PLUGINS: dict[str, dict[str, str]] = {
         "module": "kohakuterrarium.builtins.plugins.sandbox.plugin",
         "class": "SandboxPlugin",
     },
+    "skill_tool_gate": {
+        "module": "kohakuterrarium.builtins.plugins.skillgate.plugin",
+        "class": "SkillToolGatePlugin",
+    },
 }
 
 # Plugin packs are syntactic sugar for opting into multiple plugins by

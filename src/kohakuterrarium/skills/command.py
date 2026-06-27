@@ -12,7 +12,12 @@ allowed (spec 4.4).
 from typing import Any
 
 from kohakuterrarium.commands.base import BaseCommand, CommandResult
-from kohakuterrarium.skills.registry import SkillRegistry
+from kohakuterrarium.skill_docs import render_skill_resources
+from kohakuterrarium.skills.registry import (
+    IMPLICIT_SKILL_ALLOWED_TOOLS,
+    Skill,
+    SkillRegistry,
+)
 
 
 class SkillCommand(BaseCommand):
@@ -65,5 +70,41 @@ class SkillCommand(BaseCommand):
         if rest:
             parts_out.append(f"\nArguments: {rest}")
         parts_out.append("\n" + body if body else "")
+
+        # Progressive disclosure: surface bundled sibling files so the model
+        # can resolve relative references (e.g. ``template/foo.md``) with the
+        # ``read`` tool. Empty for flat-form skills with no private folder.
+        resources = render_skill_resources(skill.bundle_dir)
+        if resources:
+            parts_out.append("\n" + resources)
+
+        restriction = _render_tool_restriction(skill)
+        if restriction:
+            parts_out.append("\n" + restriction)
+
         content = "\n".join(p for p in parts_out if p)
+
+        # Mark this skill active so the allowed-tools gate plugin (when
+        # enabled) can enforce its whitelist on subsequent tool calls.
+        self._registry.set_active(skill.name)
+
         return CommandResult(content=content)
+
+
+def _render_tool_restriction(skill: Skill) -> str:
+    """Advertise a skill's ``allowed-tools`` whitelist to the model.
+
+    Returns ``""`` when the skill declares no whitelist. The advertised
+    implicit-allow set is sourced from the same constant the gate plugin
+    enforces, so the prose can never drift from the actual policy.
+    """
+    if not skill.allowed_tools:
+        return ""
+    allowed = ", ".join(skill.allowed_tools)
+    implicit = ", ".join(IMPLICIT_SKILL_ALLOWED_TOOLS)
+    return (
+        "## Tool restriction (active while you follow this skill)\n"
+        f"You may only call these tools: {allowed} "
+        f"(plus the always-available {implicit}). Other tool calls are "
+        "blocked until you invoke a different skill."
+    )
