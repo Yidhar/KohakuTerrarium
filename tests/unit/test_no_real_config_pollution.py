@@ -8,9 +8,9 @@ file's content changed during the test run.
 
 A failure here usually means a new test introduced a save / write
 path that resolves through an absolute ``Path.home()`` lookup instead
-of ``config_dir()`` — for example the deprecated
-``monkeypatch.setattr(mod, "PROFILES_PATH", …)`` seam that stopped
-working when the live read/write path moved to ``_profiles_path()``.
+of ``config_dir()``. Older tests also used to patch removed path
+constants directly; do not reintroduce that pattern because live
+read/write code resolves paths on every call.
 
 **Why we compare content hashes, not mtime/size**: when the operator
 has KohakuTerrarium running locally (browser tab, desktop app) it may

@@ -62,8 +62,10 @@ def isolate_global_state():
         from kohakuterrarium.api import deps
 
         snapshots["deps._service"] = deps._service
-        snapshots["deps._engine_legacy"] = deps._engine_legacy
-        snapshots["deps._engine_legacy_warned"] = set(deps._engine_legacy_warned)
+        snapshots["deps._engine_cache"] = deps._engine_cache
+        snapshots["deps._get_engine_warned_callsites"] = set(
+            deps._get_engine_warned_callsites
+        )
     except Exception:
         pass
 
@@ -95,8 +97,10 @@ def isolate_global_state():
         from kohakuterrarium.api import deps
 
         deps._service = snapshots.get("deps._service")
-        deps._engine_legacy = snapshots.get("deps._engine_legacy")
-        deps._engine_legacy_warned = snapshots.get("deps._engine_legacy_warned", set())
+        deps._engine_cache = snapshots.get("deps._engine_cache")
+        deps._get_engine_warned_callsites = snapshots.get(
+            "deps._get_engine_warned_callsites", set()
+        )
     except Exception:
         pass
 
@@ -185,12 +189,11 @@ def _default_isolated_config_dir(tmp_path, monkeypatch):
     overridden), but a test that *forgets* still writes into tmp
     instead of polluting the operator's real ``~/.kohakuterrarium/``.
 
-    Previously several test files used the deprecated
-    ``monkeypatch.setattr(mod, "PROFILES_PATH"/"KEYS_PATH", …)`` seam.
-    That seam stopped working after the live read/write path moved to
-    ``_profiles_path()`` / ``_keys_path()`` and silently leaked saves
-    to the real user config.  This fixture is the last line of
-    defence.
+    Some test files used to patch removed path constants directly
+    (``monkeypatch.setattr(mod, "PROFILES_PATH"/"KEYS_PATH", …)``).
+    That pattern stopped working after live read/write code switched to
+    resolving paths on every call, which meant saves could silently leak
+    to the real user config.  This fixture is the last line of defence.
     """
     # ``setenv`` (not ``setdefault``) so we deterministically override
     # any inherited value from the operator's shell — the inherited

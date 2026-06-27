@@ -425,6 +425,68 @@ class TestInitSkills:
         # Discovery failure is swallowed — registry still exists, just empty.
         assert len(fake.skills) == 0
 
+    def test_enables_gate_when_a_skill_declares_allowed_tools(
+        self, tmp_path, monkeypatch
+    ):
+        from kohakuterrarium.bootstrap import agent_init as ai_mod
+        from kohakuterrarium.skills.registry import Skill
+
+        enabled: list[str] = []
+
+        class FakePlugins:
+            def enable(self, name):
+                enabled.append(name)
+
+        monkeypatch.setattr(
+            ai_mod,
+            "discover_skills",
+            lambda **kw: [
+                Skill(name="w", description="d", body="b", allowed_tools=["bash"])
+            ],
+        )
+        session = Session(key="gate1")
+        executor = Executor()
+        executor._working_dir = tmp_path
+        fake = SimpleNamespace(
+            config=AgentConfig(name="a"),
+            executor=executor,
+            session=session,
+            scratchpad=session.scratchpad,
+            plugins=FakePlugins(),
+        )
+        AgentInitMixin._init_skills(fake)
+        # A skill with allowed-tools turns the gate on automatically.
+        assert enabled == ["skill_tool_gate"]
+
+    def test_does_not_enable_gate_without_allowed_tools(self, tmp_path, monkeypatch):
+        from kohakuterrarium.bootstrap import agent_init as ai_mod
+        from kohakuterrarium.skills.registry import Skill
+
+        enabled: list[str] = []
+
+        class FakePlugins:
+            def enable(self, name):
+                enabled.append(name)
+
+        monkeypatch.setattr(
+            ai_mod,
+            "discover_skills",
+            lambda **kw: [Skill(name="w", description="d", body="b")],
+        )
+        session = Session(key="gate2")
+        executor = Executor()
+        executor._working_dir = tmp_path
+        fake = SimpleNamespace(
+            config=AgentConfig(name="a"),
+            executor=executor,
+            session=session,
+            scratchpad=session.scratchpad,
+            plugins=FakePlugins(),
+        )
+        AgentInitMixin._init_skills(fake)
+        # No allowed-tools anywhere → the gate stays off (zero behaviour added).
+        assert enabled == []
+
 
 # ── _init_triggers ──────────────────────────────────────────────
 

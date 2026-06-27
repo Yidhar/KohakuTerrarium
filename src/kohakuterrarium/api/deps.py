@@ -44,10 +44,10 @@ from kohakuterrarium.utils.logging import get_logger
 logger = get_logger(__name__)
 
 _service: TerrariumService | None = None
-_engine_legacy: Terrarium | None = None
+_engine_cache: Terrarium | None = None
 # Track which call sites have already heard about get_engine being
 # multi-node-blind so we don't spam every request with the same warning.
-_engine_legacy_warned: set[str] = set()
+_get_engine_warned_callsites: set[str] = set()
 
 
 def _session_dir() -> str:
@@ -74,11 +74,11 @@ def set_service(service: TerrariumService | None) -> None:
     Called once at boot by :mod:`cli/serve.py`.  Tests can call this to
     inject a custom service and pass ``None`` to reset between cases.
     """
-    global _service, _engine_legacy
+    global _service, _engine_cache
     _service = service
-    # Clear the legacy engine reference; next get_engine() will pull
+    # Clear the cached engine reference; next get_engine() will pull
     # afresh from the new service if applicable.
-    _engine_legacy = None
+    _engine_cache = None
 
 
 def get_service(
@@ -185,16 +185,16 @@ def get_engine() -> Terrarium:
       sees nothing; a one-time warning per call site flags the missing
       migration.  Cross-node visibility requires :func:`get_service`.
     """
-    global _engine_legacy
+    global _engine_cache
     svc = get_service_legacy()
     if isinstance(svc, LocalTerrariumService):
-        _engine_legacy = svc.engine
+        _engine_cache = svc.engine
     else:
         # Multi-node (lab-host): no host agent engine.  Fall back to the
         # coordination engine so a ``Depends(get_engine)`` route resolves
         # instead of 500-ing — but it is provably agent-free.
-        _engine_legacy = getattr(svc, "coordination_engine", None)
-        if _engine_legacy is None:
+        _engine_cache = getattr(svc, "coordination_engine", None)
+        if _engine_cache is None:
             raise RuntimeError(
                 "get_engine() called in lab-host mode with no coordination "
                 "engine; route must migrate to Depends(get_service)"
@@ -204,8 +204,8 @@ def get_engine() -> Terrarium:
         # Caller filename:lineno keys the dedup set.
         frame = sys._getframe(1)
         callsite = f"{frame.f_code.co_filename}:{frame.f_lineno}"
-        if callsite not in _engine_legacy_warned:
-            _engine_legacy_warned.add(callsite)
+        if callsite not in _get_engine_warned_callsites:
+            _get_engine_warned_callsites.add(callsite)
             logger.warning(
                 "get_engine() in lab-host mode returns the (agent-free) "
                 "coordination engine — route needs Depends(get_service)",
@@ -219,7 +219,7 @@ def get_engine() -> Terrarium:
     # access as a hidden coupling.  A no-op attach when missing
     # keeps ``get_engine`` honest about returning *some* engine
     # instead of crashing on a fresh type.
-    runtime_prompt = getattr(_engine_legacy, "_runtime_prompt", None)
+    runtime_prompt = getattr(_engine_cache, "_runtime_prompt", None)
     if runtime_prompt is not None:
         runtime_prompt.attach()
-    return _engine_legacy
+    return _engine_cache
