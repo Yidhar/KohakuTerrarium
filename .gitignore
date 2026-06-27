@@ -108,3 +108,9 @@ dep/
 # inside the agent loop but never committed (binary screenshots +
 # rapidly-iterated notes).
 /audit/
+
+# Switchyard local workspace (created when this repo is opened as a
+# Switchyard workspace): SQLite store, artifacts, and the per-workspace
+# config. Local state, never part of the kt source tree.
+/.switchyard/
+/switchyard.toml
